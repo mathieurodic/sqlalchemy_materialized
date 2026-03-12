@@ -25,5 +25,11 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/mathieurodic/sqlalchemy-materialized"
 
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
