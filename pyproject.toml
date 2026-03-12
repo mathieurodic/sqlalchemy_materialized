@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sqlalchemy-materialized"
+version = "0.1.0"
+description = "A SQLAlchemy extension for materializing computed fields."
+authors = [
+    { name="Mathieu Rodic", email="mathieu@rodic.fr" }
+]
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "sqlalchemy>=1.4",
+    "pydantic>=2",
+]
+
+[project.urls]
+Homepage = "https://github.com/mathieurodic/sqlalchemy-materialized"
+
+[tool.setuptools.packages.find]
+where = ["src"]

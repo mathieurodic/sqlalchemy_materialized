@@ -1,0 +1,103 @@
+import sqlalchemy as sa
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+def test_materialized_property_raises_on_non_optional_union_return_annotation():
+    from sqlalchemy_materialized.decorator import materialized_property
+
+    def compute(self) -> int | str:  # type: ignore[return-value]
+        return 1
+
+    try:
+        materialized_property(compute)
+        raise AssertionError("Expected TypeError")
+    except TypeError as e:
+        assert "Unsupported return annotation" in str(e)
+
+
+def test_materialized_property_list_fk_raises_when_compute_returns_non_list(monkeypatch):
+    import sqlalchemy_materialized.decorator as dec
+
+    class FakeSession:
+        def get(self, cls, ident):  # pragma: no cover (not reached)
+            raise AssertionError("should not be called")
+
+    monkeypatch.setattr(dec, "object_session", lambda obj: FakeSession())
+
+    class Base(DeclarativeBase):
+        pass
+
+    class Author(Base):
+        __tablename__ = "author_defensive"
+
+        id: Mapped[int] = mapped_column(primary_key=True)
+
+    def compute(self) -> list[Author]:
+        return 123  # type: ignore[return-value]
+
+    class Model(Base):
+        __tablename__ = "model_list_fk_bad_compute"
+        __allow_unmapped__ = True
+
+        id: Mapped[int] = mapped_column(primary_key=True)
+        authors = dec.materialized_property(compute)
+
+    # Force "computed" state, so the getter doesn't call compute again.
+    m = Model()
+    setattr(m, "_compute__computed_at", object())
+    setattr(m, "_compute", 123)
+
+    # Getter should raise because backing value is not a list
+    try:
+        _ = m.authors
+        raise AssertionError("Expected TypeError")
+    except TypeError as e:
+        assert "backing value" in str(e) or "should be a list" in str(e)
+
+
+def test_materialized_property_list_fk_rejects_none_items(monkeypatch):
+    import sqlalchemy_materialized.decorator as dec
+
+    class _BeginNested:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSession:
+        def begin_nested(self):
+            return _BeginNested()
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr(dec, "object_session", lambda obj: FakeSession())
+
+    class Base(DeclarativeBase):
+        pass
+
+    class Author(Base):
+        __tablename__ = "author_defensive2"
+
+        id: Mapped[int] = mapped_column(primary_key=True)
+
+    def compute(self) -> list[Author]:
+        return [None]  # type: ignore[list-item]
+
+    class Model(Base):
+        __tablename__ = "model_list_fk_none_item"
+        __allow_unmapped__ = True
+
+        id: Mapped[int] = mapped_column(primary_key=True)
+        authors = dec.materialized_property(compute)
+
+    m = Model()
+
+    # Not in a session, but we should fail earlier due to None item
+    # while normalizing the compute result.
+    try:
+        _ = m.authors
+        raise AssertionError("Expected TypeError")
+    except TypeError as e:
+        assert "does not accept None items" in str(e)
