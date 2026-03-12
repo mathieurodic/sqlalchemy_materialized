@@ -30,6 +30,8 @@ def test_sa_type_mapping_from_return_annotation_int():
 
 
 def test_sa_type_mapping_fallback_to_string_for_unknown_return_type():
+    import pytest
+
     from sqlalchemy_materialized.decorator import materialized_property
 
     def compute(self) -> dict:
@@ -38,11 +40,10 @@ def test_sa_type_mapping_fallback_to_string_for_unknown_return_type():
     class Base(DeclarativeBase):
         pass
 
-    class Model(Base):
-        __tablename__ = "model_fallback"
-        __allow_unmapped__ = True
+    with pytest.raises(TypeError, match="unsupported"):
+        class Model(Base):
+            __tablename__ = "model_fallback"
+            __allow_unmapped__ = True
 
-        id: Mapped[int] = mapped_column(primary_key=True)
-        value = materialized_property(compute)
-
-    assert isinstance(Model.__table__.c.value.type, sa.String)
+            id: Mapped[int] = mapped_column(primary_key=True)
+            value = materialized_property(compute)

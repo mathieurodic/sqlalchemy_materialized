@@ -16,7 +16,7 @@ TYPE_MAP = {
     float: sa.Float,
     str: sa.String,
     bool: sa.Boolean,
-    datetime: sa.DateTime,
+    datetime: lambda: sa.DateTime(timezone=True),
     time: sa.Time,
 }
 
@@ -99,6 +99,14 @@ def make_sa_column(name: str, t: Any) -> MappedColumn:
     if BaseModel is not None and isinstance(t, type) and issubclass(t, BaseModel):
         return mapped_column(name, PydanticJSON(t), nullable=True)
 
-    # 3) "Standard Python type" case: mapping via TYPE_MAP, fallback to String.
-    sa_type = TYPE_MAP.get(t, sa.String)()
-    return mapped_column(name, sa_type, nullable=True)
+    # 3) "Standard Python type" case: mapping via TYPE_MAP.
+    if t in TYPE_MAP:
+        maker = TYPE_MAP[t]
+        return mapped_column(name, maker(), nullable=True)
+
+    raise TypeError(
+        "make_sa_column: unsupported python type annotation. "
+        f"name={name!r}, type={t!r}. "
+        f"Supported scalar types: {sorted([k.__name__ for k in TYPE_MAP.keys() if hasattr(k, '__name__')])}. "
+        "If you need custom storage, use an explicit SQLAlchemy type / TypeDecorator in your model."
+    )

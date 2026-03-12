@@ -24,7 +24,6 @@ class Base(DeclarativeBase):
 
 class Model(Base):
     __tablename__ = "model"
-    __allow_unmapped__ = True
 
     id: Mapped[int] = mapped_column(primary_key=True)
     base: Mapped[int] = mapped_column(sa.Integer)
@@ -57,7 +56,7 @@ with Session(engine) as session:
 - `PydanticJSON` is also exported to store `pydantic.BaseModel` values in a JSON column.
 - `PydanticJSONList` is also exported to store `list[pydantic.BaseModel]` values in a JSON column.
 - The computation requires the instance to be attached to a SQLAlchemy `Session`.
-  If the property is accessed for the first time on a detached instance, a `RuntimeError` is raised.
+  Detached instances are not supported: a `RuntimeError` is raised.
 
 ## Cache semantics, invalidation, recompute
 
@@ -95,12 +94,43 @@ obj.value = 123
 
 ## Transactions & side effects
 
-The compute function runs inside a SAVEPOINT (`session.begin_nested()`). This provides two properties:
+The compute function runs inside a SAVEPOINT (`session.begin_nested()`) by default. This provides two properties:
 
 - if the compute function raises, DB-side effects performed *inside the compute* are rolled back;
 - in-memory values are restored so the property remains "not computed".
 
 Note that the first access performs a `flush()`; this is intentional so the value is immediately persisted.
+
+### `in_transaction` option
+
+You can disable the SAVEPOINT wrapping if you want the compute function to run in the ambient transaction:
+
+```python
+from sqlalchemy_materialized import materialized_property
+
+
+class Model(Base):
+    __tablename__ = "model"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    base: Mapped[int] = mapped_column(sa.Integer)
+
+    @materialized_property(in_transaction=False)
+    def value(self) -> int:
+        return self.base * 2
+```
+
+- `in_transaction=True` (default): compute is wrapped in a SAVEPOINT (`session.begin_nested()`).
+  If compute raises, DB-side effects performed inside compute are rolled back.
+- `in_transaction=False`: compute is executed without a SAVEPOINT.
+  If compute raises, DB-side effects are NOT automatically rolled back (but the in-memory cached attributes
+  are still restored so the property remains "not computed").
+
+### Flush-on-first-access (important)
+
+This library intentionally flushes inside the getter on first access (when the value is not materialized yet).
+This means that accessing the property may trigger SQL statements / constraint checks earlier than you would
+expect if you assume getters are side-effect free.
 
 ## Querying (filter / order_by)
 
@@ -127,6 +157,8 @@ Two mapped attributes are injected on your model:
 - a *backing* mapped column attribute (Python name: `_{property_name}`; DB column name: `{property_name}`)
 - a computed-at mapped column attribute (Python name: `_{property_name}__computed_at`; DB column name: `{property_name}__computed_at`)
 
+The computed-at column uses `DateTime(timezone=True)` and values are stored as UTC.
+
 The leading underscore is only for the **Python attribute name** to reduce the risk of collisions with your public API.
 The actual **database column name** remains the public property name.
 
@@ -137,8 +169,9 @@ The actual **database column name** remains the public property name.
 - `list[int]`, `list[str]`, ...: the backing column is a `JSON` column.
 - `list[BaseModelSubclass]`: the backing column uses `PydanticJSONList(BaseModelSubclass)` and values are validated
   and round-tripped as `list[BaseModelSubclass]`.
-- `list[MappedClass]`: the backing column is a JSON array of primary keys. When accessed on an instance that is
-  **not attached to a Session**, the property raises (since it cannot compute or resolve instances).
+- `list[MappedClass]`: values are stored in a generated association table (one row per item + position).
+  This provides better integrity than storing PKs in JSON and preserves order.
+  Access requires the instance to be attached to a Session.
 
 ## License
 

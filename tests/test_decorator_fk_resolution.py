@@ -36,6 +36,7 @@ def test_make_sa_column_creates_foreign_key_for_mapped_return_type_and_materiali
     # and that we also have the computed-at column
     assert "author__computed_at" in Post.__table__.c
     assert isinstance(Post.__table__.c.author__computed_at.type, sa.DateTime)
+    assert Post.__table__.c.author__computed_at.type.timezone is True
 
     engine = sa.create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -80,6 +81,8 @@ def test_materialized_property_fk_returns_id_when_detached_from_session():
     engine = sa.create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
 
+    import pytest
+
     with Session(engine) as session:
         a = Author()
         session.add(a)
@@ -97,8 +100,9 @@ def test_materialized_property_fk_returns_id_when_detached_from_session():
         # Detach object from the session
         session.expunge(p)
 
-        # Out of session => cannot resolve, return the id
-        assert p.author == a.id
+        # Out of session => detached instances are not supported
+        with pytest.raises(RuntimeError, match="detached"):
+            _ = p.author
 
 
 def test_materialized_property_fk_setter_accepts_instance_and_stores_pk():

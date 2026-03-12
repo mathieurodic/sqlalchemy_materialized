@@ -94,8 +94,8 @@ def test_materialized_property_list_mappedclass_resolves_in_session_but_raises_d
         author_ids: Mapped[list[int]] = mapped_column(sa.JSON)
         authors = materialized_property(compute_authors)
 
-    # backing column is JSON (list of PKs)
-    assert isinstance(Post.__table__.c.authors.type, sa.JSON)
+    # backing storage is an association table (no authors column on post_list)
+    assert "authors" not in Post.__table__.c
 
     engine = sa.create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -113,8 +113,7 @@ def test_materialized_property_list_mappedclass_resolves_in_session_but_raises_d
         assert [a.id for a in resolved] == [a1.id, a2.id]
 
         session.expunge(p)
-        try:
+        import pytest
+
+        with pytest.raises(RuntimeError, match="detached"):
             _ = p.authors
-            raise AssertionError("Expected RuntimeError")
-        except RuntimeError as e:
-            assert "without a session" in str(e)

@@ -81,7 +81,7 @@ def test_getter_computes_once_and_does_not_flush_when_not_in_session(monkeypatch
     m = Model()
     import pytest
 
-    with pytest.raises(RuntimeError, match="cannot compute"):
+    with pytest.raises(RuntimeError, match="attached"):
         _ = m.value
     assert calls["compute"] == 0
     assert getattr(m, "_compute__computed_at") is None

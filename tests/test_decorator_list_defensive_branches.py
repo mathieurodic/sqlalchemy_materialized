@@ -19,6 +19,19 @@ def test_materialized_property_list_fk_raises_when_compute_returns_non_list(monk
     import sqlalchemy_materialized.decorator as dec
 
     class FakeSession:
+        def begin_nested(self):
+            class _BeginNested:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            return _BeginNested()
+
+        def flush(self):
+            pass
+
         def get(self, cls, ident):  # pragma: no cover (not reached)
             raise AssertionError("should not be called")
 
@@ -42,17 +55,15 @@ def test_materialized_property_list_fk_raises_when_compute_returns_non_list(monk
         id: Mapped[int] = mapped_column(primary_key=True)
         authors = dec.materialized_property(compute)
 
-    # Force "computed" state, so the getter doesn't call compute again.
+    # Here, list[MappedClass] is stored in an association relationship,
+    # therefore we can't easily force an invalid backing value. Instead we
+    # assert that an invalid compute output raises.
     m = Model()
-    setattr(m, "_compute__computed_at", object())
-    setattr(m, "_compute", 123)
-
-    # Getter should raise because backing value is not a list
     try:
         _ = m.authors
         raise AssertionError("Expected TypeError")
     except TypeError as e:
-        assert "backing value" in str(e) or "should be a list" in str(e)
+        assert "expected a list" in str(e)
 
 
 def test_materialized_property_list_fk_rejects_none_items(monkeypatch):
