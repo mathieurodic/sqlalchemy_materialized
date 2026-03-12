@@ -58,6 +58,32 @@ with Session(engine) as session:
 - The computation requires the instance to be attached to a SQLAlchemy `Session`.
   Detached instances are not supported: a `RuntimeError` is raised.
 
+### Dependency-based invalidation (`depends_on`)
+
+You can ask `materialized_property` to automatically invalidate itself when
+other mapped attributes change:
+
+```python
+class Model(Base):
+    __tablename__ = "model"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    base: Mapped[int] = mapped_column(sa.Integer)
+
+    @materialized_property(depends_on=("base",))
+    def value(self) -> int:
+        return self.base * 2
+```
+
+- Supported dependency types: mapped columns, scalar relationships, and
+  collection relationships (append/remove/bulk replace).
+- Invalidation is **in-memory only** (no implicit flush). The next access
+  recomputes and flushes as usual.
+- Invalidation clears the cached value / association rows and resets the
+  `...__computed_at` timestamp.
+- Invalidation does **not** delete referenced target rows. For `list[MappedClass]`
+  return types, only the generated *association rows* are removed.
+
 ## Cache semantics, invalidation, recompute
 
 `materialized_property` is a *cache stored in the database*.
@@ -71,6 +97,9 @@ with Session(engine) as session:
 
 This library **does not automatically detect dependencies**.
 If your computed value depends on other columns/relationships and those change, you must invalidate the cache yourself.
+
+Alternatively, you can use `depends_on=(...)` to have the library invalidate the
+property automatically when specific mapped attributes change.
 
 You can invalidate using the property deleter:
 

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, get_args, get_origin
 
 import sqlalchemy as sa
+from sqlalchemy import event
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import object_session, relationship
@@ -51,6 +52,7 @@ def _require_session(obj) -> sa.orm.Session:
 @dataclass(frozen=True)
 class _MaterializedConfig:
     in_transaction: bool = True
+    depends_on: tuple[str, ...] = ()
 
 
 class _MaterializedPropertyDescriptor:
@@ -114,6 +116,113 @@ class _MaterializedPropertyDescriptor:
 
         # 3) Build and inject the hybrid property, replacing ourselves
         setattr(owner, name, self._make_hybrid(owner))
+
+        # 4) Optional automatic invalidation when dependencies change
+        self._setup_dependency_invalidation(owner)
+
+    def _setup_dependency_invalidation(self, owner):
+        """Install SQLAlchemy attribute listeners to invalidate cache.
+
+        Semantics:
+        - invalidation is purely in-memory (no flush)
+        - for scalar-backed properties, backing storage is cleared (set to None)
+        - for list[MappedClass] properties, association rows are cleared
+        - referenced target rows are NOT deleted
+        """
+
+        depends_on = tuple(self.config.depends_on or ())
+        if not depends_on:
+            return
+
+        cache_attr = self.cache_attr
+        computed_at_attr = self.computed_at_attr
+        list_assoc_attr = self._list_assoc_attr
+        is_list_fk = bool(self._is_list and self._is_fk and list_assoc_attr)
+
+        def invalidate(target):
+            # If not computed yet, nothing to do.
+            if getattr(target, computed_at_attr, None) is None:
+                return
+
+            # Clear cached storage.
+            if is_list_fk:
+                setattr(target, list_assoc_attr, [])
+            else:
+                setattr(target, cache_attr, None)
+
+            # Mark as not computed.
+            setattr(target, computed_at_attr, None)
+
+        # Event callbacks for the various attribute event signatures.
+        def on_set(target, value, oldvalue, initiator):  # noqa: ARG001
+            invalidate(target)
+
+        def on_append(target, value, initiator):  # noqa: ARG001
+            invalidate(target)
+
+        def on_remove(target, value, initiator):  # noqa: ARG001
+            invalidate(target)
+
+        def on_bulk_replace(target, values, initiator):  # noqa: ARG001
+            invalidate(target)
+
+        def attach_listeners(attr, dep_name: str):
+            # Scalar attribute / scalar relationship
+            try:
+                event.listen(attr, "set", on_set, retval=False)
+            except Exception:
+                # Not all attribute implementations support "set".
+                pass
+
+            # Collection relationship
+            for evt_name, fn in (
+                ("append", on_append),
+                ("remove", on_remove),
+                ("bulk_replace", on_bulk_replace),
+            ):
+                try:
+                    event.listen(attr, evt_name, fn, retval=False)
+                except Exception:
+                    # Not a collection or event not supported.
+                    pass
+
+        for dep_name in depends_on:
+            if not isinstance(dep_name, str) or not dep_name:
+                raise TypeError(
+                    "materialized_property(depends_on=...): dependency names must be non-empty strings"
+                )
+
+            if not hasattr(owner, dep_name):
+                raise AttributeError(
+                    f"materialized_property(depends_on=...): {owner.__name__!r} has no attribute {dep_name!r}"
+                )
+
+        def install_for_mapped_class(mapper, cls):  # noqa: ARG001
+            # Ensure we only install listeners for the specific class this
+            # descriptor is attached to.
+            if cls is not owner:
+                return
+
+            for dep_name in depends_on:
+                dep_attr = getattr(cls, dep_name)
+                attach_listeners(dep_attr, dep_name)
+
+            # Important: don't remove ourselves immediately, because we're
+            # currently iterating the listener deque inside SQLAlchemy.
+            # Removing here would raise "deque mutated during iteration".
+            #
+            # Instead we schedule removal for the end of the current
+            # configuration cycle.
+            def remove_self():
+                try:
+                    event.remove(sa.orm.Mapper, "mapper_configured", install_for_mapped_class)
+                except Exception:
+                    pass
+
+            event.listen(sa.orm.Mapper, "after_configured", remove_self, once=True)
+
+        # Install after mapping/instrumentation is ready.
+        event.listen(sa.orm.Mapper, "mapper_configured", install_for_mapped_class)
 
     def _inject_list_fk_storage(self, owner):
         assert self._prop_name is not None
@@ -385,6 +494,7 @@ def materialized_property(
     fn: Callable[..., Any] | None = None,
     *,
     in_transaction: bool = True,
+    depends_on: tuple[str, ...] = (),
 ):
     """Create a materialized property.
 
@@ -394,7 +504,7 @@ def materialized_property(
     - value = materialized_property(compute)
     """
 
-    config = _MaterializedConfig(in_transaction=in_transaction)
+    config = _MaterializedConfig(in_transaction=in_transaction, depends_on=depends_on)
 
     if fn is None:
         def wrapper(f):
