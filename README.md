@@ -57,6 +57,12 @@ pip install etl-decorators[templating]
 - Developer notes / code layout: [`src/etl_decorators/templating/README.md`](src/etl_decorators/templating/README.md)
 - Tests: [`tests/templating/`](tests/templating/)
 
+### `etl_decorators.logging`
+
+- Main entrypoint: [`etl_decorators.logging.log`](src/etl_decorators/logging/__init__.py)
+- User documentation: [`doc/log.md`](doc/log.md)
+- Tests: [`tests/logging/`](tests/logging/)
+
 ## Optional dependencies & lazy imports
 
 Most functionality is organized in subpackages with **optional dependencies**.
