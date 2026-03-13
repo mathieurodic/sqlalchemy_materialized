@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import inspect
 from typing import Any, Awaitable, Callable, ParamSpec, overload
+
+from etl_decorators._base.decorators import DecoratorBase
 
 from .pydantic_utils import BaseModel
 from .response_parsing import (
@@ -78,34 +79,35 @@ class LLM:
             else:
                 model_t = require_pydantic_model(return_type)
 
-        is_async = inspect.iscoroutinefunction(fn)
-
-        if is_async:
-
-            async def wrapped(*args: P.args, **kwargs: P.kwargs):  # type: ignore[misc]
-                prompt = await fn(*args, **kwargs)
+        class _LLMDecorator(DecoratorBase[P, Any, None]):
+            def process_result(
+                self,
+                f: Callable[P, Any],
+                result: Any,
+                _args: tuple[Any, ...],
+                _kwargs: dict[str, Any],
+                _state: None,
+            ) -> Any:
                 prompt = require_str_prompt(
-                    prompt, fn_name=getattr(fn, "__name__", "<fn>")
+                    result, fn_name=getattr(f, "__name__", "<fn>")
                 )
-                return await self.request_async(prompt, return_type=model_t)
+                return self_outer.request(prompt, return_type=model_t)
 
-        else:
-
-            def wrapped(*args: P.args, **kwargs: P.kwargs):  # type: ignore[misc]
-                prompt = fn(*args, **kwargs)
+            async def process_result_async(
+                self,
+                f: Callable[P, Any],
+                result: Any,
+                _args: tuple[Any, ...],
+                _kwargs: dict[str, Any],
+                _state: None,
+            ) -> Any:
                 prompt = require_str_prompt(
-                    prompt, fn_name=getattr(fn, "__name__", "<fn>")
+                    result, fn_name=getattr(f, "__name__", "<fn>")
                 )
-                return self.request(prompt, return_type=model_t)
+                return await self_outer.request_async(prompt, return_type=model_t)
 
-        # Preserve basic metadata.
-        wrapped.__name__ = getattr(fn, "__name__", wrapped.__name__)
-        wrapped.__qualname__ = getattr(fn, "__qualname__", wrapped.__qualname__)
-        wrapped.__doc__ = getattr(fn, "__doc__", None)
-        wrapped.__module__ = getattr(fn, "__module__", None)
-        wrapped.__wrapped__ = fn
-
-        return wrapped
+        self_outer = self
+        return _LLMDecorator().decorate(fn)
 
     def request(self, prompt: str, *, return_type: type[BaseModel] | None):
         try:

@@ -22,6 +22,10 @@ pip install etl-decorators[templating]
 
 ## Table of contents
 
+### Internal base utilities
+
+- Shared decorator plumbing: [`src/etl_decorators/_base/README.md`](src/etl_decorators/_base/README.md)
+
 ### `etl_decorators.sqlalchemy`
 
 - Main entrypoint: [`etl_decorators.sqlalchemy.materialized_property`](src/etl_decorators/sqlalchemy/__init__.py)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from etl_decorators._base.decorators import OptionalFnDecoratorBase
+
 from .config import _MaterializedConfig
 from .descriptor import _MaterializedPropertyDescriptor
 
@@ -62,11 +64,9 @@ def materialized_property(
         retry_interval=retry_interval,
     )
 
-    if fn is None:
+    binder = OptionalFnDecoratorBase()
 
-        def wrapper(f):
-            return _MaterializedPropertyDescriptor(f, config)
+    def _decorate(f: Callable[..., Any]):
+        return _MaterializedPropertyDescriptor(f, config)
 
-        return wrapper
-
-    return _MaterializedPropertyDescriptor(fn, config)
+    return binder.bind_optional(fn, _decorate)

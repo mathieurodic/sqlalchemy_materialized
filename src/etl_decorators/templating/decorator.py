@@ -6,6 +6,8 @@ import inspect
 import re
 from typing import Any, Callable, ParamSpec, overload
 
+from etl_decorators._base.decorators import DecoratorBase, OptionalFnDecoratorBase
+
 from .deps import _require_jinja2
 from .payload import _read_template_payload
 
@@ -50,45 +52,29 @@ def template(
             When not provided, an Environment with StrictUndefined is created.
     """
 
+    class _TemplateDecorator(DecoratorBase[P, str, None]):
+        def process_result(
+            self,
+            f: Callable[P, Any],
+            result: Any,
+            args: tuple[Any, ...],
+            kwargs: dict[str, Any],
+            _state: None,
+        ) -> str:
+            return _render_payload(
+                result,
+                fn=f,
+                args=args,
+                kwargs=kwargs,
+                jinja_env=jinja_env,
+            )
+
+    binder = OptionalFnDecoratorBase()
+
     def _decorate(f: Callable[P, Any]):
-        is_async = inspect.iscoroutinefunction(f)
+        return _TemplateDecorator().decorate(f)
 
-        if is_async:
-
-            async def wrapped(*args: P.args, **kwargs: P.kwargs):  # type: ignore[misc]
-                payload = await f(*args, **kwargs)
-                return _render_payload(
-                    payload,
-                    fn=f,
-                    args=args,
-                    kwargs=kwargs,
-                    jinja_env=jinja_env,
-                )
-
-        else:
-
-            def wrapped(*args: P.args, **kwargs: P.kwargs):  # type: ignore[misc]
-                payload = f(*args, **kwargs)
-                return _render_payload(
-                    payload,
-                    fn=f,
-                    args=args,
-                    kwargs=kwargs,
-                    jinja_env=jinja_env,
-                )
-
-        # Preserve basic metadata.
-        wrapped.__name__ = getattr(f, "__name__", wrapped.__name__)
-        wrapped.__qualname__ = getattr(f, "__qualname__", wrapped.__qualname__)
-        wrapped.__doc__ = getattr(f, "__doc__", None)
-        wrapped.__module__ = getattr(f, "__module__", None)
-        wrapped.__wrapped__ = f
-
-        return wrapped
-
-    if fn is None:
-        return _decorate
-    return _decorate(fn)
+    return binder.bind_optional(fn, _decorate)
 
 
 def _render_payload(

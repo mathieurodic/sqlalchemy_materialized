@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import inspect
 from typing import Any, Callable, ParamSpec, overload
+
+from etl_decorators._base.decorators import DecoratorBase, OptionalFnDecoratorBase
 
 from .deps import _require_bs4
 from .markdown import _to_markdown
@@ -48,43 +49,28 @@ def parse_html(
             document if `extract is None`) to Markdown (requires markdownify).
     """
 
+    class _ParseHTMLDecorator(DecoratorBase[P, Any, None]):
+        def process_result(
+            self,
+            _fn: Callable[P, Any],
+            result: Any,
+            _args: tuple[Any, ...],
+            _kwargs: dict[str, Any],
+            _state: None,
+        ) -> Any:
+            return _process_payload(
+                result,
+                extract=extract,
+                extract_as_collection=extract_as_collection,
+                convert_to_markdown=convert_to_markdown,
+            )
+
+    binder = OptionalFnDecoratorBase()
+
     def _decorate(f: Callable[P, Any]):
-        is_async = inspect.iscoroutinefunction(f)
+        return _ParseHTMLDecorator().decorate(f)
 
-        if is_async:
-
-            async def wrapped(*args: P.args, **kwargs: P.kwargs):  # type: ignore[misc]
-                payload = await f(*args, **kwargs)
-                return _process_payload(
-                    payload,
-                    extract=extract,
-                    extract_as_collection=extract_as_collection,
-                    convert_to_markdown=convert_to_markdown,
-                )
-
-        else:
-
-            def wrapped(*args: P.args, **kwargs: P.kwargs):  # type: ignore[misc]
-                payload = f(*args, **kwargs)
-                return _process_payload(
-                    payload,
-                    extract=extract,
-                    extract_as_collection=extract_as_collection,
-                    convert_to_markdown=convert_to_markdown,
-                )
-
-        # Preserve basic metadata.
-        wrapped.__name__ = getattr(f, "__name__", wrapped.__name__)
-        wrapped.__qualname__ = getattr(f, "__qualname__", wrapped.__qualname__)
-        wrapped.__doc__ = getattr(f, "__doc__", None)
-        wrapped.__module__ = getattr(f, "__module__", None)
-        wrapped.__wrapped__ = f
-
-        return wrapped
-
-    if fn is None:
-        return _decorate
-    return _decorate(fn)
+    return binder.bind_optional(fn, _decorate)
 
 
 def _process_payload(

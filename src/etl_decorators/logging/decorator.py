@@ -5,8 +5,9 @@ from __future__ import annotations
 import inspect
 import logging
 import time
-from functools import wraps
 from typing import Any, Callable, ParamSpec, TypeVar, overload
+
+from etl_decorators._base.decorators import DecoratorBase, OptionalFnDecoratorBase, _RAISE
 
 
 P = ParamSpec("P")
@@ -111,89 +112,66 @@ def log(
     resolved_level = _resolve_level(level)
     max_repr = _DEFAULT_MAX_REPR
 
+    class _LogDecorator(DecoratorBase[P, R, tuple[logging.Logger, str, inspect.Signature, float]]):
+        def before_call(
+            self,
+            f: Callable[P, Any],
+            args: tuple[Any, ...],
+            kwargs: dict[str, Any],
+        ) -> tuple[logging.Logger, str, inspect.Signature, float]:
+            logger = logging.getLogger(getattr(f, "__module__", __name__))
+            name = getattr(f, "__name__", "<callable>")
+            sig = inspect.signature(f)
+
+            if with_arguments:
+                bound = sig.bind_partial(*args, **kwargs)
+                bound.apply_defaults()
+                bound_str = _format_bound_arguments(bound, max_repr=max_repr)
+                logger.log(resolved_level, "start %s(%s)", name, bound_str)
+            else:
+                logger.log(resolved_level, "start %s", name)
+
+            start = time.perf_counter()
+            return (logger, name, sig, start)
+
+        def process_result(
+            self,
+            _fn: Callable[P, Any],
+            result: Any,
+            _args: tuple[Any, ...],
+            _kwargs: dict[str, Any],
+            state: tuple[logging.Logger, str, inspect.Signature, float],
+        ) -> R:
+            logger, name, _sig, start = state
+            elapsed = time.perf_counter() - start
+            msg_parts = [f"end {name}"]
+            if with_duration:
+                msg_parts.append(f"duration={elapsed:.6f}s")
+            if with_result:
+                msg_parts.append(f"result={_safe_repr(result, max_len=max_repr)}")
+            logger.log(resolved_level, " ".join(msg_parts))
+            return result
+
+        def process_exception(
+            self,
+            _fn: Callable[P, Any],
+            exc: Exception,
+            _args: tuple[Any, ...],
+            _kwargs: dict[str, Any],
+            state: tuple[logging.Logger, str, inspect.Signature, float],
+        ) -> Any:
+            logger, name, _sig, start = state
+            elapsed = time.perf_counter() - start
+            msg_parts = [f"failed {name}"]
+            if with_duration:
+                msg_parts.append(f"duration={elapsed:.6f}s")
+            msg_parts.append(f"exc={exc.__class__.__name__}: {exc}")
+            logger.log(resolved_level, " ".join(msg_parts), exc_info=True)
+            return _RAISE
+
+    binder = OptionalFnDecoratorBase()
+
     def _decorate(f: Callable[P, R]) -> Callable[P, R]:
-        logger = logging.getLogger(getattr(f, "__module__", __name__))
-        # Prefer a short, stable name for log messages.
-        # __qualname__ includes <locals> noise when functions are defined inside
-        # other functions (common in tests and notebooks).
-        name = getattr(f, "__name__", "<callable>")
-        sig = inspect.signature(f)
-        is_async = inspect.iscoroutinefunction(f)
+        return _LogDecorator().decorate(f)
 
-        if is_async:
-
-            @wraps(f)
-            async def wrapped(*args: P.args, **kwargs: P.kwargs) -> R:  # type: ignore[misc]
-                bound_str = ""
-                if with_arguments:
-                    bound = sig.bind_partial(*args, **kwargs)
-                    bound.apply_defaults()
-                    bound_str = _format_bound_arguments(bound, max_repr=max_repr)
-
-                if with_arguments:
-                    logger.log(resolved_level, "start %s(%s)", name, bound_str)
-                else:
-                    logger.log(resolved_level, "start %s", name)
-
-                start = time.perf_counter()
-                try:
-                    result = await f(*args, **kwargs)
-                except Exception as e:
-                    elapsed = time.perf_counter() - start
-                    msg_parts = [f"failed {name}"]
-                    if with_duration:
-                        msg_parts.append(f"duration={elapsed:.6f}s")
-                    msg_parts.append(f"exc={e.__class__.__name__}: {e}")
-                    logger.log(resolved_level, " ".join(msg_parts), exc_info=True)
-                    raise
-
-                elapsed = time.perf_counter() - start
-                msg_parts = [f"end {name}"]
-                if with_duration:
-                    msg_parts.append(f"duration={elapsed:.6f}s")
-                if with_result:
-                    msg_parts.append(f"result={_safe_repr(result, max_len=max_repr)}")
-                logger.log(resolved_level, " ".join(msg_parts))
-                return result
-
-        else:
-
-            @wraps(f)
-            def wrapped(*args: P.args, **kwargs: P.kwargs) -> R:  # type: ignore[misc]
-                bound_str = ""
-                if with_arguments:
-                    bound = sig.bind_partial(*args, **kwargs)
-                    bound.apply_defaults()
-                    bound_str = _format_bound_arguments(bound, max_repr=max_repr)
-
-                if with_arguments:
-                    logger.log(resolved_level, "start %s(%s)", name, bound_str)
-                else:
-                    logger.log(resolved_level, "start %s", name)
-
-                start = time.perf_counter()
-                try:
-                    result = f(*args, **kwargs)
-                except Exception as e:
-                    elapsed = time.perf_counter() - start
-                    msg_parts = [f"failed {name}"]
-                    if with_duration:
-                        msg_parts.append(f"duration={elapsed:.6f}s")
-                    msg_parts.append(f"exc={e.__class__.__name__}: {e}")
-                    logger.log(resolved_level, " ".join(msg_parts), exc_info=True)
-                    raise
-
-                elapsed = time.perf_counter() - start
-                msg_parts = [f"end {name}"]
-                if with_duration:
-                    msg_parts.append(f"duration={elapsed:.6f}s")
-                if with_result:
-                    msg_parts.append(f"result={_safe_repr(result, max_len=max_repr)}")
-                logger.log(resolved_level, " ".join(msg_parts))
-                return result
-
-        return wrapped
-
-    if fn is None:
-        return _decorate
-    return _decorate(fn)
+    return binder.bind_optional(fn, _decorate)
