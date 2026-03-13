@@ -374,9 +374,11 @@ def test_list_fk_setter_accepts_instances_and_ids_and_deleter_clears():
         p.authors = [a1]
         assert [a.id for a in p.authors] == [a1.id]
 
-        # setter with None => normalize_list_fk_to_instances returns []
-        p.authors = None
-        assert p.authors == []
+        import pytest
+
+        # With strict validation, None is rejected when the return annotation is not Optional.
+        with pytest.raises(TypeError, match="None is not allowed"):
+            p.authors = None
 
         # setter with unknown id triggers the "id not found" RuntimeError
         with pytest.raises(RuntimeError, match="not found"):
@@ -463,9 +465,11 @@ def test_normalize_to_id_list_branch_via_inject_list_fk_storage_noop(monkeypatch
         session.add(p)
         session.flush()
 
-        # None branch
-        p.authors = None
-        assert getattr(p, "_compute_authors") is None
+        import pytest
+
+        # With strict validation, None is rejected when the return annotation is not Optional.
+        with pytest.raises(TypeError, match="None is not allowed"):
+            p.authors = None
 
         # wrong type branch
         with pytest.raises(TypeError, match="expected a list"):

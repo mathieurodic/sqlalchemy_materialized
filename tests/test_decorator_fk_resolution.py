@@ -190,11 +190,11 @@ def test_materialized_property_fk_setter_accepts_none_but_next_get_recomputes():
         session.add(p)
         session.flush()
 
-        p.author = None
-        assert getattr(p, "_compute_author") is None
+        import pytest
 
-        # Next access should return the cached None and not recompute.
-        assert p.author is None
+        # With strict validation, None is rejected when the return annotation is not Optional.
+        with pytest.raises(TypeError, match="None is not allowed"):
+            p.author = None
 
 
 def test_materialized_property_fk_when_compute_returns_none_property_returns_none():
@@ -209,9 +209,8 @@ def test_materialized_property_fk_when_compute_returns_none_property_returns_non
 
         id: Mapped[int] = mapped_column(primary_key=True)
 
-    def compute_author(self) -> Author:
-        # Force a None (even if the annotation is Author) to cover the branch.
-        return None  # type: ignore[return-value]
+    def compute_author(self) -> Author | None:
+        return None
 
     class Post(Base):
         __tablename__ = "post5"

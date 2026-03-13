@@ -3,6 +3,8 @@ from __future__ import annotations
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
+import time
 from typing import Any, Callable, get_args, get_origin
 
 import sqlalchemy as sa
@@ -13,6 +15,9 @@ from sqlalchemy.orm import object_session, relationship
 
 from .columns import make_sa_column
 from .type_utils import unwrap_optional
+
+
+logger = logging.getLogger(__name__)
 
 
 def _is_mapped_class(t: type) -> bool:
@@ -53,6 +58,15 @@ def _require_session(obj) -> sa.orm.Session:
 class _MaterializedConfig:
     in_transaction: bool = True
     depends_on: tuple[str, ...] = ()
+    validate: bool = True
+    retry_on: (
+        type[Exception]
+        | tuple[type[Exception], ...]
+        | Callable[[Exception], bool]
+    ) = ()
+    retry_max: int = 3
+    retry_factor: float = 2.0
+    retry_interval: float = 1.0
 
 
 class _MaterializedPropertyDescriptor:
@@ -78,13 +92,14 @@ class _MaterializedPropertyDescriptor:
 
         try:
             # Normalize Optional[T] / T | None so FK detection and isinstance() work.
-            unwrapped, _is_optional = unwrap_optional(return_ann)
+            unwrapped, is_optional = unwrap_optional(return_ann)
         except TypeError as e:
             raise TypeError(
                 f"Unsupported return annotation for materialized_property {fn.__name__}: {return_ann!r}"
             ) from e
 
         self.return_type = unwrapped
+        self._is_optional = is_optional
         self._is_list = get_origin(unwrapped) is list
         if self._is_list:
             args = list(get_args(unwrapped))
@@ -315,12 +330,141 @@ class _MaterializedPropertyDescriptor:
         computed_at_attr = self.computed_at_attr
         compute_fn = self.fn
         in_transaction = self.config.in_transaction
+        validate = self.config.validate
+        retry_on = self.config.retry_on
+        retry_max = self.config.retry_max
+        retry_factor = self.config.retry_factor
+        retry_interval = self.config.retry_interval
         is_fk = self._is_fk
         is_list = self._is_list
+        is_optional = self._is_optional
         target_cls = self._list_item_type if is_list else self.return_type
+        list_item_type = self._list_item_type
         list_assoc_attr = self._list_assoc_attr
         list_assoc_cls = self._list_assoc_cls
         is_list_fk = bool(is_list and is_fk and list_assoc_attr and list_assoc_cls)
+
+        prop_name = self._prop_name or cache_attr
+
+        def _pk_python_type(mapped_cls: type) -> type | None:
+            """Best-effort extraction of PK python type for a mapped class."""
+            try:
+                mapper = sa_inspect(mapped_cls)
+                pk_cols = list(mapper.primary_key)
+                if len(pk_cols) != 1:
+                    return None
+                pk_col = pk_cols[0]
+                typ = getattr(pk_col, "type", None)
+                if typ is None:
+                    return None
+                # May raise NotImplementedError for some custom types.
+                return typ.python_type  # type: ignore[attr-defined]
+            except Exception:
+                return None
+
+        fk_pk_py_type: type | None = _pk_python_type(target_cls) if is_fk else None
+
+        def _is_valid_identifier(v: object) -> bool:
+            """Return True if v looks like an acceptable FK identifier.
+
+            We intentionally always allow non-bool ints (per project requirement),
+            even if the DB pk python type is not int.
+            """
+            if isinstance(v, bool):
+                # bool is a subclass of int; almost never a valid PK identifier.
+                return False
+
+            if fk_pk_py_type is int:
+                return isinstance(v, int)
+
+            if fk_pk_py_type is not None and isinstance(fk_pk_py_type, type):
+                try:
+                    if isinstance(v, fk_pk_py_type):
+                        return True
+                except Exception:
+                    pass
+
+            return isinstance(v, int)
+
+        def _raise_type(msg: str) -> None:
+            raise TypeError(f"materialized_property {prop_name}: {msg}")
+
+        def validate_value(value: Any) -> None:
+            """Strict runtime validation for both compute outputs and setter inputs."""
+            if not validate:
+                return
+
+            if value is None:
+                if is_optional:
+                    return
+                _raise_type("None is not allowed (return annotation is not Optional)")
+
+            if is_list:
+                if not isinstance(value, list):
+                    _raise_type(
+                        f"expected a list for list[...] return type, received: {type(value)!r}"
+                    )
+
+                # FK-ish list: accept instances or identifiers.
+                if is_fk:
+                    for item in value:
+                        if item is None:
+                            _raise_type("list[...] does not accept None items")
+
+                        if isinstance(item, target_cls):
+                            # Fail early for transient instances.
+                            _pk_id_from_instance(item)
+                            continue
+
+                        if _is_valid_identifier(item):
+                            continue
+
+                        _raise_type(
+                            "list items must be mapped instances or identifiers; "
+                            f"received: {type(item)!r}"
+                        )
+                    return
+
+                # Non-FK list: enforce element type when it's a real Python type.
+                item_t = list_item_type
+                if item_t in (Any, object) or not isinstance(item_t, type):
+                    return
+                for item in value:
+                    if item is None:
+                        _raise_type("list[...] does not accept None items")
+                    if not isinstance(item, item_t):
+                        _raise_type(
+                            f"list items must be {item_t!r}, received: {type(item)!r}"
+                        )
+                return
+
+            # Scalar
+            if is_fk:
+                if isinstance(value, target_cls):
+                    _pk_id_from_instance(value)
+                    return
+                if _is_valid_identifier(value):
+                    return
+                _raise_type(
+                    "expected a mapped instance or identifier, "
+                    f"received: {type(value)!r}"
+                )
+                return
+
+            # Non-FK scalar
+            rt = self.return_type
+            if rt in (Any, object) or not isinstance(rt, type):
+                return
+            if not isinstance(value, rt):
+                _raise_type(f"expected {rt!r}, received: {type(value)!r}")
+
+        def should_retry(exc: Exception) -> bool:
+            if isinstance(retry_on, type) and issubclass(retry_on, Exception):
+                return isinstance(exc, retry_on)
+            if isinstance(retry_on, tuple):
+                return isinstance(exc, retry_on)
+            # Note: exception classes are callable, so we check for those above.
+            return bool(retry_on(exc))
 
         def normalize_to_id(value):
             if not is_fk:
@@ -403,34 +547,54 @@ class _MaterializedPropertyDescriptor:
                     old_cache = getattr(self, cache_attr)
                 old_computed_at = getattr(self, computed_at_attr)
 
-                try:
-                    if in_transaction:
-                        cm = session.begin_nested()
-                    else:
-                        cm = nullcontext()
-
-                    with cm:
-                        computed = compute_fn(self)
-
-                        if is_list_fk:
-                            targets = normalize_list_fk_to_instances(self, computed)
-                            assoc_rows = [
-                                list_assoc_cls(pos=i, target=t) for i, t in enumerate(targets)
-                            ]
-                            setattr(self, list_assoc_attr, assoc_rows)
-                            setattr(self, computed_at_attr, datetime.now(timezone.utc))
-                            session.flush()
+                for attempt in range(1, retry_max + 1):
+                    try:
+                        if in_transaction:
+                            cm = session.begin_nested()
                         else:
-                            normalized = normalize_to_id(computed)
-                            setattr(self, cache_attr, normalized)
-                            setattr(self, computed_at_attr, datetime.now(timezone.utc))
-                            session.flush()
-                except Exception:
-                    # Rollback DB side effects is handled by begin_nested()'s context manager.
-                    # We also restore the in-memory attributes so the property remains "not computed".
-                    setattr(self, cache_attr, old_cache)
-                    setattr(self, computed_at_attr, old_computed_at)
-                    raise
+                            cm = nullcontext()
+
+                        with cm:
+                            computed = compute_fn(self)
+                            validate_value(computed)
+
+                            if is_list_fk:
+                                targets = normalize_list_fk_to_instances(self, computed)
+                                assoc_rows = [
+                                    list_assoc_cls(pos=i, target=t) for i, t in enumerate(targets)
+                                ]
+                                setattr(self, list_assoc_attr, assoc_rows)
+                                setattr(self, computed_at_attr, datetime.now(timezone.utc))
+                                session.flush()
+                            else:
+                                normalized = normalize_to_id(computed)
+                                setattr(self, cache_attr, normalized)
+                                setattr(self, computed_at_attr, datetime.now(timezone.utc))
+                                session.flush()
+                        break
+                    except Exception as e:
+                        logger.error(
+                            "materialized_property compute failed (%s): %s",
+                            e.__class__.__name__,
+                            str(e),
+                        )
+                        logger.debug(
+                            "materialized_property compute traceback",
+                            exc_info=True,
+                        )
+
+                        # Rollback DB side effects is handled by begin_nested()'s context manager.
+                        # We also restore the in-memory attributes so the property remains "not computed".
+                        setattr(self, cache_attr, old_cache)
+                        setattr(self, computed_at_attr, old_computed_at)
+
+                        is_last_attempt = attempt >= retry_max
+                        if is_last_attempt or not should_retry(e):
+                            raise
+
+                        delay = retry_interval * (retry_factor ** (attempt - 1))
+                        if delay > 0:
+                            time.sleep(delay)
 
             # Fast path for list[MappedClass]
             if is_list_fk:
@@ -466,6 +630,7 @@ class _MaterializedPropertyDescriptor:
 
         @prop.setter
         def prop(self, value):
+            validate_value(value)
             if is_list_fk:
                 targets = normalize_list_fk_to_instances(self, value)
                 assoc_rows = [
@@ -495,16 +660,56 @@ def materialized_property(
     *,
     in_transaction: bool = True,
     depends_on: tuple[str, ...] = (),
+    validate: bool = True,
+    retry_on: (
+        type[Exception]
+        | tuple[type[Exception], ...]
+        | Callable[[Exception], bool]
+    ) = (),
+    retry_max: int = 3,
+    retry_factor: float = 2.0,
+    retry_interval: float = 1.0,
 ):
     """Create a materialized property.
 
     Supports:
     - @materialized_property
     - @materialized_property(in_transaction=False)
+    - @materialized_property(retry_on=SomeError, retry_max=3)
+    - @materialized_property(retry_on=(SomeError,), retry_max=3)
     - value = materialized_property(compute)
     """
 
-    config = _MaterializedConfig(in_transaction=in_transaction, depends_on=depends_on)
+    if retry_max < 1:
+        raise ValueError("materialized_property(...): retry_max must be >= 1")
+    if retry_interval < 0:
+        raise ValueError("materialized_property(...): retry_interval must be >= 0")
+
+    # Validate retry_on early so should_retry() can be simple and predictable.
+    if isinstance(retry_on, tuple):
+        for t in retry_on:
+            if not (isinstance(t, type) and issubclass(t, Exception)):
+                raise TypeError(
+                    "materialized_property(...): retry_on tuple items must be Exception subclasses"
+                )
+    elif isinstance(retry_on, type) and issubclass(retry_on, Exception):
+        pass
+    elif callable(retry_on):
+        pass
+    else:
+        raise TypeError(
+            "materialized_property(...): retry_on must be an Exception subclass, a tuple of Exception subclasses, or a predicate"
+        )
+
+    config = _MaterializedConfig(
+        in_transaction=in_transaction,
+        depends_on=depends_on,
+        validate=validate,
+        retry_on=retry_on,
+        retry_max=retry_max,
+        retry_factor=retry_factor,
+        retry_interval=retry_interval,
+    )
 
     if fn is None:
         def wrapper(f):

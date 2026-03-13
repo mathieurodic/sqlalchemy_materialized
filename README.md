@@ -7,7 +7,7 @@ A SQLAlchemy extension to **materialize** computed properties: compute on first 
 ```bash
 pip install sqlalchemy-materialized
 # or, from source:
-# pip install .
+# pip install -e .
 ```
 
 ## Usage
@@ -154,6 +154,56 @@ class Model(Base):
 - `in_transaction=False`: compute is executed without a SAVEPOINT.
   If compute raises, DB-side effects are NOT automatically rolled back (but the in-memory cached attributes
   are still restored so the property remains "not computed").
+
+## Retry policy (transient failures)
+
+Sometimes the compute function (or the flush it triggers) can fail for transient reasons
+(e.g. serialization errors, lock timeouts, flaky external calls). You can configure an
+exponential-backoff retry policy.
+
+```python
+from sqlalchemy_materialized import materialized_property
+
+
+class Model(Base):
+    __tablename__ = "model"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    base: Mapped[int] = mapped_column(sa.Integer)
+
+    @materialized_property(
+        retry_on=RuntimeError,  # or (RuntimeError, SomeOtherError)
+        retry_max=3,
+        retry_interval=1.0,
+        retry_factor=2.0,
+    )
+    def value(self) -> int:
+        return self.base * 2
+```
+
+Parameters:
+
+- `retry_on`: what errors are considered retriable.
+  - `retry_on=SomeException` (single exception class)
+  - `retry_on=(SomeException, OtherException)` (tuple of exception classes)
+  - `retry_on=lambda exc: ...` (predicate)
+- `retry_max` (default: `3`): total number of attempts (must be `>= 1`).
+- `retry_interval` (default: `1.0`): initial wait in seconds between attempts (must be `>= 0`).
+- `retry_factor` (default: `2.0`): exponential backoff multiplier.
+
+Backoff formula:
+
+`sleep = retry_interval * (retry_factor ** (attempt - 1))`
+
+Notes:
+
+- Retries wrap the same compute+persist logic used on first access.
+- When an attempt fails, the in-memory cache is restored so the property remains
+  "not computed" (same semantics as if it failed without retries).
+- If `in_transaction=True` (default), each attempt runs inside a SAVEPOINT
+  (`session.begin_nested()`), so DB-side effects performed by the compute function
+  are rolled back on failure.
+- Retries do not change the fact that first access does a `flush()`.
 
 ### Flush-on-first-access (important)
 
