@@ -38,12 +38,15 @@ html = [
 csv = [
     "pandas>=2",
 ]
+templating = [
+    "jinja2",
+]
 test = [
     "pytest",
     "pytest-cov",
     "python-dotenv",
     # tests currently cover the SQLAlchemy subpackage
-    "etl-decorators[sqlalchemy,llms,html,csv]",
+    "etl-decorators[sqlalchemy,llms,html,csv,templating]",
 ]
 
 [tool.setuptools.packages.find]

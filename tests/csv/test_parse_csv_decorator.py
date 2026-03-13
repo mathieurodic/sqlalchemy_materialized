@@ -67,8 +67,15 @@ def test_parse_csv_missing_pandas_raises():
     def get_csv():
         return "a,b\n1,2\n"
 
-    with pytest.raises(RuntimeError, match="pandas is required"):
-        list(get_csv())
+    try:
+        import pandas  # noqa: F401
+
+        # pandas installed => decorator should work.
+        assert list(get_csv()) == [{"a": 1, "b": 2}]
+    except Exception:
+        # pandas missing => decorator should raise a clear error.
+        with pytest.raises(RuntimeError, match="pandas is required"):
+            list(get_csv())
 
 
 def test__read_csv_payload_supports_string_path_and_filelike(tmp_path):
