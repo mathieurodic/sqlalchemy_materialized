@@ -34,3 +34,7 @@ pip install etl-decorators[csv]
 - [`etl_decorators.llms.LLM`](doc/llm.md)
 - [`etl_decorators.html.parse_html`](doc/parse_html.md)
 - [`etl_decorators.csv.parse_csv`](doc/parse_csv.md)
+
+## Developers documentation
+
+- Package overview / code documentation TOC: [`src/etl_decorators/README.md`](src/etl_decorators/README.md)

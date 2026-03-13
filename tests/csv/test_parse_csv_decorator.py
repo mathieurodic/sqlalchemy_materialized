@@ -136,7 +136,7 @@ def test__parse_scalar_more_branches(monkeypatch: pytest.MonkeyPatch):
     assert _parse_scalar(w, auto_datetime=True) is w  # non-string passthrough
 
     # Force datetime parsing to fail to cover fallback-to-string branch.
-    from etl_decorators import csv as csv_mod
+    from etl_decorators.csv import scalar as scalar_mod
 
     class _FakeDatetime:
         @staticmethod
@@ -144,7 +144,7 @@ def test__parse_scalar_more_branches(monkeypatch: pytest.MonkeyPatch):
             raise ValueError("boom")
 
     # Patch the module-level `datetime` symbol (not datetime.datetime.fromisoformat).
-    monkeypatch.setattr(csv_mod, "datetime", _FakeDatetime)
+    monkeypatch.setattr(scalar_mod, "datetime", _FakeDatetime)
     assert _parse_scalar("2026-03-13", auto_datetime=True) == "2026-03-13"
 
 
@@ -154,23 +154,23 @@ def test__parse_scalar_covers_regex_exception_branches(monkeypatch: pytest.Monke
     Those are not normally triggered, but we keep them for robustness.
     """
 
-    from etl_decorators import csv as csv_mod
+    from etl_decorators.csv import scalar as scalar_mod
 
     def _raise(*_a, **_k):
         raise RuntimeError("re broken")
 
-    monkeypatch.setattr(csv_mod.re, "fullmatch", _raise)
-    assert csv_mod._parse_scalar("123", auto_datetime=False) == "123"
+    monkeypatch.setattr(scalar_mod.re, "fullmatch", _raise)
+    assert scalar_mod._parse_scalar("123", auto_datetime=False) == "123"
 
 
 def test__sniff_csv_dialect_fallback_when_sniffer_fails(monkeypatch: pytest.MonkeyPatch):
-    from etl_decorators import csv as csv_mod
+    from etl_decorators.csv import dialect as dialect_mod
 
     def _sniff_fail(self, sample, delimiters=None):
         raise RuntimeError("nope")
 
-    monkeypatch.setattr(csv_mod._csv.Sniffer, "sniff", _sniff_fail)
-    d = csv_mod._sniff_csv_dialect(
+    monkeypatch.setattr(dialect_mod._csv.Sniffer, "sniff", _sniff_fail)
+    d = dialect_mod._sniff_csv_dialect(
         "a,b\n1,2\n",
         delimiter=None,
         quotechar=None,

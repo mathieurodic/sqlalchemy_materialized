@@ -4,6 +4,17 @@
 returning HTML (or a reference to HTML) into a parsed BeautifulSoup document,
 with optional CSS extraction and optional markdown conversion.
 
+## Return types
+
+The return type depends on `extract`, `extract_as_collection`, and
+`convert_to_markdown`:
+
+- `extract is None` and `convert_to_markdown=False` → `bs4.BeautifulSoup`
+- `extract is None` and `convert_to_markdown=True` → `str`
+- `extract is not None` and `extract_as_collection=False` → `bs4.Tag | None`
+- `extract is not None` and `extract_as_collection=True` → `list[bs4.Tag]`
+- with `convert_to_markdown=True` and extraction → `str` / `list[str]`
+
 ## Installation
 
 ```bash
