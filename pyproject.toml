@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "etl-decorators"
-version = "0.1.0"
+version = "0.3.0"
 description = "A collection of small, focused decorators for ETL / data applications."
 authors = [
     { name="Mathieu Rodic", email="mathieu@rodic.fr" }
@@ -31,12 +31,16 @@ llms = [
     "litellm",
     "pydantic>=2",
 ]
+html = [
+    "beautifulsoup4",
+    "markdownify",
+]
 test = [
     "pytest",
     "pytest-cov",
     "python-dotenv",
     # tests currently cover the SQLAlchemy subpackage
-    "etl-decorators[sqlalchemy,llms]",
+    "etl-decorators[sqlalchemy,llms,html]",
 ]
 
 [tool.setuptools.packages.find]
