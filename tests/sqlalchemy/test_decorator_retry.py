@@ -8,10 +8,13 @@ class TransientError(RuntimeError):
 
 
 def test_retry_on_tuple_retries_then_succeeds(monkeypatch):
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     sleeps: list[float] = []
-    monkeypatch.setattr("sqlalchemy_materialized.decorator.time.sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(
+        "etl_decorators.sqlalchemy.materialized.descriptor.time.sleep",
+        lambda s: sleeps.append(s),
+    )
 
     calls = {"compute": 0}
 
@@ -55,10 +58,13 @@ def test_retry_on_tuple_retries_then_succeeds(monkeypatch):
 def test_retry_on_single_exception_class_form(monkeypatch):
     """`retry_on` also accepts a single exception class (not only a tuple)."""
 
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     sleeps: list[float] = []
-    monkeypatch.setattr("sqlalchemy_materialized.decorator.time.sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(
+        "etl_decorators.sqlalchemy.materialized.descriptor.time.sleep",
+        lambda s: sleeps.append(s),
+    )
 
     calls = {"compute": 0}
 
@@ -98,10 +104,13 @@ def test_retry_on_single_exception_class_form(monkeypatch):
 
 
 def test_retry_on_callable_predicate(monkeypatch):
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     sleeps: list[float] = []
-    monkeypatch.setattr("sqlalchemy_materialized.decorator.time.sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(
+        "etl_decorators.sqlalchemy.materialized.descriptor.time.sleep",
+        lambda s: sleeps.append(s),
+    )
 
     calls = {"compute": 0}
 
@@ -147,7 +156,7 @@ def test_retry_on_callable_predicate(monkeypatch):
 def test_retry_logs_error_and_debug_traceback(caplog):
     """Exceptions should be logged at error (summary) and debug (traceback)."""
 
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     caplog.set_level("DEBUG")
 
@@ -195,10 +204,10 @@ def test_retry_logs_error_and_debug_traceback(caplog):
 
 
 def test_retry_does_not_retry_on_unmatched_exception(monkeypatch):
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     monkeypatch.setattr(
-        "sqlalchemy_materialized.decorator.time.sleep",
+        "etl_decorators.sqlalchemy.materialized.descriptor.time.sleep",
         lambda s: (_ for _ in ()).throw(AssertionError("should not sleep")),
     )
 
@@ -237,10 +246,13 @@ def test_retry_does_not_retry_on_unmatched_exception(monkeypatch):
 
 
 def test_retry_max_limits_attempts(monkeypatch):
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     sleeps: list[float] = []
-    monkeypatch.setattr("sqlalchemy_materialized.decorator.time.sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(
+        "etl_decorators.sqlalchemy.materialized.descriptor.time.sleep",
+        lambda s: sleeps.append(s),
+    )
 
     calls = {"compute": 0}
 
@@ -281,10 +293,10 @@ def test_retry_max_limits_attempts(monkeypatch):
 
 
 def test_retry_interval_0_does_not_sleep(monkeypatch):
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     monkeypatch.setattr(
-        "sqlalchemy_materialized.decorator.time.sleep",
+        "etl_decorators.sqlalchemy.materialized.descriptor.time.sleep",
         lambda s: (_ for _ in ()).throw(AssertionError("should not sleep")),
     )
 
@@ -324,7 +336,7 @@ def test_retry_interval_0_does_not_sleep(monkeypatch):
 
 
 def test_retry_arg_validation():
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     def compute(self) -> int:
         return 1

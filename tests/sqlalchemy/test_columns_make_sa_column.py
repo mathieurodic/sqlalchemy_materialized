@@ -2,7 +2,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 def test_make_sa_column_raises_for_composite_pk_model():
-    from sqlalchemy_materialized.columns import make_sa_column
+    from etl_decorators.sqlalchemy.orm.columns import make_sa_column
 
     class Base(DeclarativeBase):
         pass

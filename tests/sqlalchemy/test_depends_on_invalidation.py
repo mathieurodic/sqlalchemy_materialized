@@ -3,7 +3,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, rela
 
 
 def test_depends_on_column_change_invalidates_and_recomputes_on_next_access():
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     calls = {"compute": 0}
 
@@ -44,7 +44,7 @@ def test_depends_on_column_change_invalidates_and_recomputes_on_next_access():
 
 
 def test_depends_on_relationship_collection_change_invalidates_and_recomputes():
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     calls = {"compute": 0}
 
@@ -100,7 +100,7 @@ def test_depends_on_invalidates_without_flush_side_effects():
     previous persisted value until an explicit flush.
     """
 
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     def compute(self) -> int:
         return self.base * 2

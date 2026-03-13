@@ -11,7 +11,7 @@ class Payload(BaseModel):
 
 
 def test_pydantic_json_column_manual_roundtrip_sqlite():
-    from sqlalchemy_materialized import PydanticJSON
+    from etl_decorators.sqlalchemy.type_decorators.pydantic_json import PydanticJSON
 
     class Base(DeclarativeBase):
         pass
@@ -46,8 +46,8 @@ def test_pydantic_json_column_manual_roundtrip_sqlite():
 
 
 def test_make_sa_column_detects_pydantic_return_type_via_materialized_property():
-    from sqlalchemy_materialized import PydanticJSON
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy.type_decorators.pydantic_json import PydanticJSON
+    from etl_decorators.sqlalchemy import materialized_property
 
     class Base(DeclarativeBase):
         pass

@@ -4,7 +4,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 
 def test_materialized_property_list_int_maps_to_json_column():
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     def compute(self) -> list[int]:
         return [1, 2, self.base]
@@ -36,8 +36,8 @@ class Payload(BaseModel):
 
 
 def test_materialized_property_list_pydantic_roundtrip_sqlite():
-    from sqlalchemy_materialized import PydanticJSONList
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy.type_decorators.pydantic_json import PydanticJSONList
+    from etl_decorators.sqlalchemy import materialized_property
 
     def compute(self) -> list[Payload]:
         return [Payload(a=self.base), Payload(a=self.base + 1)]
@@ -71,7 +71,7 @@ def test_materialized_property_list_pydantic_roundtrip_sqlite():
 
 
 def test_materialized_property_list_mappedclass_resolves_in_session_but_raises_detached():
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     class Base(DeclarativeBase):
         pass

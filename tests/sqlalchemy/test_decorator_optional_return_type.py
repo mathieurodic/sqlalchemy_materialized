@@ -5,7 +5,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 def test_materialized_property_accepts_optional_mapped_return_type_and_resolves_instance():
     """Optional[MappedClass] should be supported for FK detection and resolution."""
 
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     class Base(DeclarativeBase):
         pass
@@ -49,7 +49,7 @@ def test_materialized_property_accepts_optional_mapped_return_type_and_resolves_
 
 
 def test_make_sa_column_raises_on_non_optional_union():
-    from sqlalchemy_materialized.columns import make_sa_column
+    from etl_decorators.sqlalchemy.orm.columns import make_sa_column
 
     try:
         make_sa_column("x", int | str)
@@ -60,7 +60,7 @@ def test_make_sa_column_raises_on_non_optional_union():
 
 def test_unwrap_optional_raises_on_optional_union_with_multiple_non_none():
     """Covers the strictness: Optional[Union[A, B]] is rejected."""
-    from sqlalchemy_materialized.type_utils import unwrap_optional
+    from etl_decorators.sqlalchemy.utils.typing import unwrap_optional
 
     try:
         unwrap_optional(int | str | None)

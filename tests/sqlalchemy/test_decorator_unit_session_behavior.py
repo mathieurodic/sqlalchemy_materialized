@@ -4,7 +4,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 def test_getter_computes_once_and_flushes_when_in_session(monkeypatch):
     """Unit test: verify caching & flush behavior without needing a real DB."""
-    import sqlalchemy_materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.descriptor as descriptor
 
     calls = {"compute": 0, "flush": 0}
 
@@ -23,10 +24,7 @@ def test_getter_computes_once_and_flushes_when_in_session(monkeypatch):
         def flush(self):
             calls["flush"] += 1
 
-    def fake_object_session(obj):
-        return FakeSession()
-
-    monkeypatch.setattr(dec, "object_session", fake_object_session)
+    monkeypatch.setattr(descriptor, "_require_session", lambda obj: FakeSession())
 
     def compute(self) -> int:
         calls["compute"] += 1
@@ -55,14 +53,17 @@ def test_getter_computes_once_and_flushes_when_in_session(monkeypatch):
 
 
 def test_getter_computes_once_and_does_not_flush_when_not_in_session(monkeypatch):
-    import sqlalchemy_materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.descriptor as descriptor
 
     calls = {"compute": 0}
 
-    def fake_object_session(obj):
-        return None
+    def raise_detached(obj):  # noqa: ARG001
+        raise RuntimeError(
+            "materialized_property: object must be attached to a Session (detached instances are not supported)."
+        )
 
-    monkeypatch.setattr(dec, "object_session", fake_object_session)
+    monkeypatch.setattr(descriptor, "_require_session", raise_detached)
 
     def compute(self) -> int:
         calls["compute"] += 1
@@ -88,13 +89,7 @@ def test_getter_computes_once_and_does_not_flush_when_not_in_session(monkeypatch
 
 
 def test_setter_sets_backing_value_directly(monkeypatch):
-    import sqlalchemy_materialized.decorator as dec
-
-    def fake_object_session(obj):
-        # Should not be needed for setter
-        raise AssertionError("object_session should not be called by setter")
-
-    monkeypatch.setattr(dec, "object_session", fake_object_session)
+    import etl_decorators.sqlalchemy.materialized.decorator as dec
 
     def compute(self) -> int:
         # Should not be called when using setter
@@ -118,7 +113,8 @@ def test_setter_sets_backing_value_directly(monkeypatch):
 
 
 def test_deleter_sets_backing_to_none_and_flushes_when_in_session(monkeypatch):
-    import sqlalchemy_materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.descriptor as descriptor
 
     calls = {"flush": 0}
 
@@ -136,10 +132,7 @@ def test_deleter_sets_backing_to_none_and_flushes_when_in_session(monkeypatch):
         def flush(self):
             calls["flush"] += 1
 
-    def fake_object_session(obj):
-        return FakeSession()
-
-    monkeypatch.setattr(dec, "object_session", fake_object_session)
+    monkeypatch.setattr(descriptor, "_require_session", lambda obj: FakeSession())
 
     def compute(self) -> int:
         return 9

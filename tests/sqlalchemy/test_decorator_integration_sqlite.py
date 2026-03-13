@@ -4,7 +4,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 def test_integration_sqlite_flush_persists_computed_value_and_delete_sets_null():
     """Integration test with a real Session/flush to ensure the value is stored in DB."""
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     calls = {"compute": 0}
 
@@ -68,7 +68,7 @@ def test_integration_sqlite_materialized_value_can_be_used_in_filter_and_order_b
     does not trigger computation.
     """
 
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     calls = {"compute": 0}
 
@@ -113,7 +113,7 @@ def test_integration_sqlite_materialized_value_can_be_used_in_filter_and_order_b
 
 def test_integration_sqlite_compute_runs_in_savepoint_and_rolls_back_side_effects_on_error():
     """If compute_fn creates DB side effects and then errors, everything should rollback."""
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     class Base(DeclarativeBase):
         pass

@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sqlalchemy-materialized"
+name = "etl-decorators"
 version = "0.1.0"
-description = "A SQLAlchemy extension for materializing computed fields."
+description = "A collection of small, focused decorators for ETL / data applications."
 authors = [
     { name="Mathieu Rodic", email="mathieu@rodic.fr" }
 ]
@@ -17,18 +17,26 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
-dependencies = [
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/mathieurodic/etl-decorators"
+
+[project.optional-dependencies]
+sqlalchemy = [
     "sqlalchemy>=1.4",
     "pydantic>=2",
 ]
-
-[project.urls]
-Homepage = "https://github.com/mathieurodic/sqlalchemy-materialized"
-
-[project.optional-dependencies]
+llms = [
+    "litellm",
+    "pydantic>=2",
+]
 test = [
     "pytest",
     "pytest-cov",
+    "python-dotenv",
+    # tests currently cover the SQLAlchemy subpackage
+    "etl-decorators[sqlalchemy,llms]",
 ]
 
 [tool.setuptools.packages.find]

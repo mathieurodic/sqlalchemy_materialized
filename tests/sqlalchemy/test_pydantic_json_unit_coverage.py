@@ -11,15 +11,15 @@ class Payload(BaseModel):
 
 def test_pydantic_json_unit_optional_normalization():
     """Covers Optional[T] normalization (Union[T, None])."""
-    from sqlalchemy_materialized.columns import make_sa_column
+    from etl_decorators.sqlalchemy.orm.columns import make_sa_column
 
     col = make_sa_column("x", int | None)
     assert isinstance(col.column.type, sa.Integer)
 
 
 def test_make_sa_column_normalizes_optional_pydantic_model():
-    from sqlalchemy_materialized.columns import make_sa_column
-    from sqlalchemy_materialized.pydantic_json import PydanticJSON
+    from etl_decorators.sqlalchemy.orm.columns import make_sa_column
+    from etl_decorators.sqlalchemy.type_decorators.pydantic_json import PydanticJSON
 
     col = make_sa_column("payload", Payload | None)
     assert isinstance(col.column.type, PydanticJSON)
@@ -27,7 +27,7 @@ def test_make_sa_column_normalizes_optional_pydantic_model():
 
 
 def test_pydantic_json_init_raises_for_non_basemodel():
-    from sqlalchemy_materialized.pydantic_json import PydanticJSON
+    from etl_decorators.sqlalchemy.type_decorators.pydantic_json import PydanticJSON
 
     try:
         PydanticJSON(int)  # type: ignore[arg-type]
@@ -37,7 +37,7 @@ def test_pydantic_json_init_raises_for_non_basemodel():
 
 
 def test_pydantic_json_process_bind_param_accepts_dict_and_str_and_rejects_other():
-    from sqlalchemy_materialized.pydantic_json import PydanticJSON
+    from etl_decorators.sqlalchemy.type_decorators.pydantic_json import PydanticJSON
 
     typ = PydanticJSON(Payload)
 
@@ -55,7 +55,7 @@ def test_pydantic_json_process_bind_param_accepts_dict_and_str_and_rejects_other
 
 
 def test_pydantic_json_process_result_value_none_str_and_fallback():
-    from sqlalchemy_materialized.pydantic_json import PydanticJSON
+    from etl_decorators.sqlalchemy.type_decorators.pydantic_json import PydanticJSON
 
     typ = PydanticJSON(Payload)
 
@@ -76,7 +76,7 @@ def test_pydantic_json_process_result_value_none_str_and_fallback():
 
 def test_pydantic_json_bind_param_string_must_be_valid_json():
     """Covers the ValueError raised on invalid JSON input."""
-    from sqlalchemy_materialized.pydantic_json import PydanticJSON
+    from etl_decorators.sqlalchemy.type_decorators.pydantic_json import PydanticJSON
 
     typ = PydanticJSON(Payload)
 
@@ -89,7 +89,7 @@ def test_pydantic_json_bind_param_string_must_be_valid_json():
 
 def test_pydantic_json_bind_and_manual_json_dump_is_stable():
     """Robustness test: ensure the output is JSON-serializable."""
-    from sqlalchemy_materialized.pydantic_json import PydanticJSON
+    from etl_decorators.sqlalchemy.type_decorators.pydantic_json import PydanticJSON
 
     typ = PydanticJSON(Payload)
     out = typ.process_bind_param(Payload(a=10, b="ok"), dialect=None)
@@ -97,7 +97,7 @@ def test_pydantic_json_bind_and_manual_json_dump_is_stable():
 
 
 def test_pydantic_json_list_init_raises_for_non_basemodel():
-    from sqlalchemy_materialized.pydantic_json import PydanticJSONList
+    from etl_decorators.sqlalchemy.type_decorators.pydantic_json import PydanticJSONList
 
     try:
         PydanticJSONList(int)  # type: ignore[arg-type]
@@ -107,7 +107,7 @@ def test_pydantic_json_list_init_raises_for_non_basemodel():
 
 
 def test_pydantic_json_list_process_bind_param_happy_paths_and_errors():
-    from sqlalchemy_materialized.pydantic_json import PydanticJSONList
+    from etl_decorators.sqlalchemy.type_decorators.pydantic_json import PydanticJSONList
 
     typ = PydanticJSONList(Payload)
 
@@ -150,7 +150,7 @@ def test_pydantic_json_list_process_bind_param_happy_paths_and_errors():
 
 
 def test_pydantic_json_list_process_result_value_branches():
-    from sqlalchemy_materialized.pydantic_json import PydanticJSONList
+    from etl_decorators.sqlalchemy.type_decorators.pydantic_json import PydanticJSONList
 
     typ = PydanticJSONList(Payload)
 

@@ -4,7 +4,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, rela
 
 
 def test_materialized_property_raises_when_missing_return_annotation():
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     def compute(self):
         return 1
@@ -14,7 +14,7 @@ def test_materialized_property_raises_when_missing_return_annotation():
 
 
 def test_materialized_property_depends_on_rejects_non_string_or_empty_dependency():
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     def compute(self) -> int:
         return 1
@@ -40,7 +40,7 @@ def test_materialized_property_depends_on_rejects_non_string_or_empty_dependency
 
 
 def test_materialized_property_depends_on_rejects_missing_attribute():
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     def compute(self) -> int:
         return 1
@@ -60,9 +60,10 @@ def test_materialized_property_depends_on_rejects_missing_attribute():
 def test_depends_on_listener_installation_swallows_event_listen_errors(monkeypatch):
     """Covers the defensive try/except around event.listen for attribute events."""
 
-    import sqlalchemy_materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.depends_on as depends_on
+    import etl_decorators.sqlalchemy.materialized.decorator as dec
 
-    real_listen = dec.event.listen
+    real_listen = depends_on.event.listen
 
     def listen(obj, name, fn, *args, **kwargs):  # noqa: ANN001
         # We still want mapper-level events to be installed so the code path
@@ -71,7 +72,7 @@ def test_depends_on_listener_installation_swallows_event_listen_errors(monkeypat
             raise RuntimeError("boom")
         return real_listen(obj, name, fn, *args, **kwargs)
 
-    monkeypatch.setattr(dec.event, "listen", listen)
+    monkeypatch.setattr(depends_on.event, "listen", listen)
 
     calls = {"compute": 0}
 
@@ -108,16 +109,17 @@ def test_depends_on_listener_installation_swallows_event_listen_errors(monkeypat
 def test_depends_on_remove_self_swallows_event_remove_errors(monkeypatch):
     """Covers the defensive try/except around event.remove in remove_self()."""
 
-    import sqlalchemy_materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.depends_on as depends_on
+    import etl_decorators.sqlalchemy.materialized.decorator as dec
 
-    real_remove = dec.event.remove
+    real_remove = depends_on.event.remove
 
     def remove(obj, name, fn):  # noqa: ANN001
         if name == "mapper_configured":
             raise RuntimeError("boom")
         return real_remove(obj, name, fn)
 
-    monkeypatch.setattr(dec.event, "remove", remove)
+    monkeypatch.setattr(depends_on.event, "remove", remove)
 
     def compute(self) -> int:
         return self.base * 2
@@ -138,7 +140,7 @@ def test_depends_on_remove_self_swallows_event_remove_errors(monkeypatch):
 
 
 def test_list_fk_storage_raises_when_owner_has_no_primary_key():
-    import sqlalchemy_materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.decorator as dec
 
     class Base(DeclarativeBase):
         pass
@@ -162,7 +164,7 @@ def test_list_fk_storage_raises_when_owner_has_no_primary_key():
 
 
 def test_list_fk_storage_raises_when_target_has_composite_primary_key():
-    import sqlalchemy_materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.decorator as dec
 
     class Base(DeclarativeBase):
         pass
@@ -188,7 +190,7 @@ def test_list_fk_storage_raises_when_target_has_composite_primary_key():
 def test_depends_on_invalidation_clears_association_cache_for_list_fk():
     """Covers invalidation branch for list[MappedClass] properties."""
 
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     calls = {"compute": 0}
 
@@ -233,7 +235,7 @@ def test_depends_on_invalidation_clears_association_cache_for_list_fk():
 
 
 def test_depends_on_relationship_remove_and_bulk_replace_invalidates():
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     calls = {"compute": 0}
 
@@ -285,7 +287,7 @@ def test_depends_on_relationship_remove_and_bulk_replace_invalidates():
 
 
 def test_in_transaction_false_uses_nullcontext_path():
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     calls = {"compute": 0}
 
@@ -317,7 +319,7 @@ def test_in_transaction_false_uses_nullcontext_path():
 
 
 def test_hybrid_expression_raises_for_list_return_types():
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     def compute(self) -> list[int]:
         return [1]
@@ -337,7 +339,7 @@ def test_hybrid_expression_raises_for_list_return_types():
 
 
 def test_list_fk_setter_accepts_instances_and_ids_and_deleter_clears():
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     class Base(DeclarativeBase):
         pass
@@ -393,7 +395,7 @@ def test_list_fk_setter_accepts_instances_and_ids_and_deleter_clears():
 def test_materialized_property_decorator_factory_fn_none_path():
     """Covers materialized_property(fn is None) wrapper path."""
 
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     class Base(DeclarativeBase):
         pass
@@ -426,10 +428,11 @@ def test_normalize_to_id_list_branch_via_inject_list_fk_storage_noop(monkeypatch
     JSON backing column by skipping `_inject_list_fk_storage`.
     """
 
-    import sqlalchemy_materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.decorator as dec
+    from etl_decorators.sqlalchemy.materialized.descriptor import _MaterializedPropertyDescriptor
 
     monkeypatch.setattr(
-        dec._MaterializedPropertyDescriptor,
+        _MaterializedPropertyDescriptor,
         "_inject_list_fk_storage",
         lambda self, owner: None,
     )

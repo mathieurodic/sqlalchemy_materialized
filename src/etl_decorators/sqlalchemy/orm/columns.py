@@ -7,8 +7,8 @@ from sqlalchemy.exc import NoInspectionAvailable
 from sqlalchemy.orm import mapped_column
 from sqlalchemy.orm.properties import MappedColumn
 
-from .pydantic_json import PydanticJSON, PydanticJSONList
-from .type_utils import unwrap_optional
+from ..type_decorators.pydantic_json import PydanticJSON, PydanticJSONList
+from ..utils.typing import unwrap_optional
 
 
 TYPE_MAP = {

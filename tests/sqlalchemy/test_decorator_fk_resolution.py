@@ -4,7 +4,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 def test_make_sa_column_creates_foreign_key_for_mapped_return_type_and_materialized_property_resolves_instance():
     """Integration test: return type is a mapped model => backing column is FK, property returns instance in-session."""
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     class Base(DeclarativeBase):
         pass
@@ -57,7 +57,7 @@ def test_make_sa_column_creates_foreign_key_for_mapped_return_type_and_materiali
 
 
 def test_materialized_property_fk_returns_id_when_detached_from_session():
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     class Base(DeclarativeBase):
         pass
@@ -107,7 +107,7 @@ def test_materialized_property_fk_returns_id_when_detached_from_session():
 
 def test_materialized_property_fk_setter_accepts_instance_and_stores_pk():
     """Covers normalize_to_id(value is instance) => _pk_id_from_instance."""
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     class Base(DeclarativeBase):
         pass
@@ -157,7 +157,7 @@ def test_materialized_property_fk_setter_accepts_none_but_next_get_recomputes():
     "computed". Setting the property to None marks it as computed and should
     *not* trigger a recompute on the next access.
     """
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     class Base(DeclarativeBase):
         pass
@@ -199,7 +199,7 @@ def test_materialized_property_fk_setter_accepts_none_but_next_get_recomputes():
 
 def test_materialized_property_fk_when_compute_returns_none_property_returns_none():
     """Covers resolve_from_id(ident is None) in the getter."""
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     class Base(DeclarativeBase):
         pass

@@ -3,7 +3,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 
 def test_pk_id_from_instance_raises_when_instance_has_no_identity():
-    from sqlalchemy_materialized.decorator import _pk_id_from_instance
+    from etl_decorators.sqlalchemy.materialized.helpers import _pk_id_from_instance
 
     class Base(DeclarativeBase):
         pass
@@ -23,7 +23,7 @@ def test_pk_id_from_instance_raises_when_instance_has_no_identity():
 
 
 def test_pk_id_from_instance_raises_when_composite_pk():
-    from sqlalchemy_materialized.decorator import _pk_id_from_instance
+    from etl_decorators.sqlalchemy.materialized.helpers import _pk_id_from_instance
 
     class Base(DeclarativeBase):
         pass

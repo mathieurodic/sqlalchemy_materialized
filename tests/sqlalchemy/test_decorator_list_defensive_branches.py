@@ -3,7 +3,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 def test_materialized_property_raises_on_non_optional_union_return_annotation():
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     def compute(self) -> int | str:  # type: ignore[return-value]
         return 1
@@ -16,7 +16,8 @@ def test_materialized_property_raises_on_non_optional_union_return_annotation():
 
 
 def test_materialized_property_list_fk_raises_when_compute_returns_non_list(monkeypatch):
-    import sqlalchemy_materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.descriptor as descriptor
+    import etl_decorators.sqlalchemy.materialized.decorator as dec
 
     class FakeSession:
         def begin_nested(self):
@@ -35,7 +36,8 @@ def test_materialized_property_list_fk_raises_when_compute_returns_non_list(monk
         def get(self, cls, ident):  # pragma: no cover (not reached)
             raise AssertionError("should not be called")
 
-    monkeypatch.setattr(dec, "object_session", lambda obj: FakeSession())
+    # Patch the helper used by _require_session
+    monkeypatch.setattr(descriptor, "_require_session", lambda obj: FakeSession())
 
     class Base(DeclarativeBase):
         pass
@@ -67,7 +69,8 @@ def test_materialized_property_list_fk_raises_when_compute_returns_non_list(monk
 
 
 def test_materialized_property_list_fk_rejects_none_items(monkeypatch):
-    import sqlalchemy_materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.descriptor as descriptor
+    import etl_decorators.sqlalchemy.materialized.decorator as dec
 
     class _BeginNested:
         def __enter__(self):
@@ -83,7 +86,7 @@ def test_materialized_property_list_fk_rejects_none_items(monkeypatch):
         def flush(self):
             pass
 
-    monkeypatch.setattr(dec, "object_session", lambda obj: FakeSession())
+    monkeypatch.setattr(descriptor, "_require_session", lambda obj: FakeSession())
 
     class Base(DeclarativeBase):
         pass

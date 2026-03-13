@@ -1,0 +1,284 @@
+import asyncio
+import sys
+import types
+
+import pytest
+from pydantic import BaseModel
+
+from etl_decorators.llms import LLM
+
+
+class Summary(BaseModel):
+    summary: str
+
+
+def _install_fake_litellm(monkeypatch, *, completion_resp, acompletion_resp=None):
+    mod = types.SimpleNamespace()
+    calls = {"completion": [], "acompletion": []}
+
+    def completion(**kwargs):
+        calls["completion"].append(kwargs)
+        return completion_resp
+
+    async def acompletion(**kwargs):
+        calls["acompletion"].append(kwargs)
+        return acompletion_resp if acompletion_resp is not None else completion_resp
+
+    mod.completion = completion
+    mod.acompletion = acompletion
+    monkeypatch.setitem(sys.modules, "litellm", mod)
+    return calls
+
+
+def test_llm_decorator_sync_text(monkeypatch):
+    calls = _install_fake_litellm(
+        monkeypatch,
+        completion_resp={"choices": [{"message": {"content": "ok"}}]},
+    )
+
+    llm = LLM(model="fake")
+
+    @llm
+    def prompt(name: str) -> str:
+        return f"Hello {name}"
+
+    out = prompt("Bob")
+    assert out == "ok"
+    assert calls["completion"][0]["model"] == "fake"
+    assert calls["completion"][0]["messages"] == [{"role": "user", "content": "Hello Bob"}]
+
+
+def test_llm_passes_api_key(monkeypatch):
+    calls = _install_fake_litellm(
+        monkeypatch,
+        completion_resp={"choices": [{"message": {"content": "ok"}}]},
+    )
+
+    llm = LLM(model="fake", api_key="secret")
+
+    @llm
+    def prompt() -> str:
+        return "x"
+
+    assert prompt() == "ok"
+    assert calls["completion"][0]["api_key"] == "secret"
+    # Ensure api_key doesn't leak in repr
+    assert "secret" not in repr(llm)
+
+
+def test_llm_passes_api_key_async(monkeypatch):
+    calls = _install_fake_litellm(
+        monkeypatch,
+        completion_resp={"choices": [{"message": {"content": "ok"}}]},
+        acompletion_resp={"choices": [{"message": {"content": "async-ok"}}]},
+    )
+
+    llm = LLM(model="fake", api_key="secret")
+
+    @llm
+    async def prompt() -> str:
+        return "x"
+
+    out = asyncio.run(prompt())
+    assert out == "async-ok"
+    assert calls["acompletion"][0]["api_key"] == "secret"
+
+
+def test_llm_decorator_sync_structured(monkeypatch):
+    calls = _install_fake_litellm(
+        monkeypatch,
+        completion_resp={"choices": [{"message": {"parsed": {"summary": "hi"}}}]},
+    )
+
+    llm = LLM(model="fake")
+
+    @llm(return_type=Summary)
+    def prompt(_: str) -> str:
+        return "Return a summary"
+
+    out = prompt("x")
+    assert isinstance(out, Summary)
+    assert out.summary == "hi"
+    assert calls["completion"][0]["response_format"] is Summary
+
+
+def test_llm_decorator_rejects_non_str_prompt(monkeypatch):
+    _install_fake_litellm(
+        monkeypatch,
+        completion_resp={"choices": [{"message": {"content": "ok"}}]},
+    )
+    llm = LLM(model="fake")
+
+    @llm
+    def prompt() -> str:  # type: ignore[return-value]
+        return 123  # noqa: PLR2004
+
+    with pytest.raises(TypeError, match="must return a str prompt"):
+        prompt()
+
+
+def test_llm_decorator_rejects_invalid_return_type():
+    llm = LLM(model="fake")
+
+    with pytest.raises(TypeError, match="return_type must be a pydantic.BaseModel subclass"):
+
+        @llm(return_type=str)  # type: ignore[arg-type]
+        def prompt() -> str:
+            return "x"
+
+
+def test_llm_decorator_rejects_none_return_type():
+    llm = LLM(model="fake")
+
+    with pytest.raises(TypeError, match="return_type cannot be None"):
+
+        @llm(return_type=None)  # type: ignore[arg-type]
+        def prompt() -> str:
+            return "x"
+
+
+def test_llm_decorator_rejects_non_type_return_type():
+    llm = LLM(model="fake")
+
+    with pytest.raises(TypeError, match="return_type must be a pydantic.BaseModel subclass"):
+
+        @llm(return_type=object())  # type: ignore[arg-type]
+        def prompt() -> str:
+            return "x"
+
+
+def test_llm_decorator_async_text(monkeypatch):
+    calls = _install_fake_litellm(
+        monkeypatch,
+        completion_resp={"choices": [{"message": {"content": "ok"}}]},
+        acompletion_resp={"choices": [{"message": {"content": "async-ok"}}]},
+    )
+
+    llm = LLM(model="fake")
+
+    @llm
+    async def prompt(name: str) -> str:
+        return f"Hello {name}"
+
+    out = asyncio.run(prompt("Bob"))
+    assert out == "async-ok"
+    assert calls["acompletion"][0]["messages"] == [{"role": "user", "content": "Hello Bob"}]
+
+
+def test_llm_decorator_async_structured(monkeypatch):
+    calls = _install_fake_litellm(
+        monkeypatch,
+        completion_resp={"choices": [{"message": {"content": "ignored"}}]},
+        acompletion_resp={"choices": [{"message": {"parsed": {"summary": "async-hi"}}}]},
+    )
+
+    llm = LLM(model="fake")
+
+    @llm(return_type=Summary)
+    async def prompt() -> str:
+        return "Return a summary"
+
+    out = asyncio.run(prompt())
+    assert isinstance(out, Summary)
+    assert out.summary == "async-hi"
+    assert calls["acompletion"][0]["response_format"] is Summary
+
+
+def test_llm_extract_text_content_attr_path(monkeypatch):
+    """Cover the `resp.choices[0].message.content` extraction branch."""
+
+    class _Msg:
+        content = "attr-ok"
+
+    class _Choice:
+        message = _Msg()
+
+    class _Resp:
+        choices = [_Choice()]
+
+    calls = _install_fake_litellm(monkeypatch, completion_resp=_Resp())
+
+    llm = LLM(model="fake")
+
+    @llm
+    def prompt() -> str:
+        return "x"
+
+    assert prompt() == "attr-ok"
+
+
+def test_llm_extract_text_content_raises(monkeypatch):
+    """Cover the error path when the response isn't OpenAI-like."""
+    calls = _install_fake_litellm(monkeypatch, completion_resp=object())
+    llm = LLM(model="fake")
+
+    @llm
+    def prompt() -> str:
+        return "x"
+
+    with pytest.raises(TypeError, match="Unable to extract text completion"):
+        prompt()
+
+
+def test_llm_extract_structured_from_content_json(monkeypatch):
+    """Cover structured output fallback parsing from message content as JSON."""
+    calls = _install_fake_litellm(
+        monkeypatch,
+        completion_resp={"choices": [{"message": {"content": '{"summary": "from-json"}'}}]},
+    )
+
+    llm = LLM(model="fake")
+
+    @llm(return_type=Summary)
+    def prompt() -> str:
+        return "x"
+
+    out = prompt()
+    assert isinstance(out, Summary)
+    assert out.summary == "from-json"
+
+
+def test_llm_extract_structured_attr_parsed(monkeypatch):
+    """Cover the `resp.choices[0].message.parsed` structured extraction branch."""
+
+    class _Msg:
+        parsed = {"summary": "attr-parsed"}
+
+    class _Choice:
+        message = _Msg()
+
+    class _Resp:
+        choices = [_Choice()]
+
+    calls = _install_fake_litellm(monkeypatch, completion_resp=_Resp())
+
+    llm = LLM(model="fake")
+
+    @llm(return_type=Summary)
+    def prompt() -> str:
+        return "x"
+
+    out = prompt()
+    assert isinstance(out, Summary)
+    assert out.summary == "attr-parsed"
+
+
+def test_llm_async_requires_acompletion(monkeypatch):
+    """Cover the branch where litellm lacks `acompletion`."""
+    mod = types.SimpleNamespace()
+
+    def completion(**kwargs):
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    # Intentionally do NOT expose acompletion
+    mod.completion = completion
+    monkeypatch.setitem(sys.modules, "litellm", mod)
+
+    llm = LLM(model="fake")
+
+    @llm
+    async def prompt() -> str:
+        return "x"
+
+    with pytest.raises(RuntimeError, match="does not expose `acompletion`"):
+        asyncio.run(prompt())

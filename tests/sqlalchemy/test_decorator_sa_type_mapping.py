@@ -3,7 +3,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 def test_sa_type_mapping_from_return_annotation_int():
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     def compute(self) -> int:
         return 123
@@ -32,7 +32,7 @@ def test_sa_type_mapping_from_return_annotation_int():
 def test_sa_type_mapping_fallback_to_string_for_unknown_return_type():
     import pytest
 
-    from sqlalchemy_materialized.decorator import materialized_property
+    from etl_decorators.sqlalchemy import materialized_property
 
     def compute(self) -> dict:
         return {"a": 1}
