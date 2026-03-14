@@ -102,6 +102,26 @@ def test_llm_decorator_sync_structured(monkeypatch):
     assert calls["completion"][0]["response_format"] is Summary
 
 
+def test_llm_infers_return_type_from_annotation(monkeypatch):
+    """If `return_type` isn't provided, LLM should infer it from `-> BaseModel`."""
+
+    calls = _install_fake_litellm(
+        monkeypatch,
+        completion_resp={"choices": [{"message": {"parsed": {"summary": "hi"}}}]},
+    )
+
+    llm = LLM(model="fake")
+
+    @llm
+    def prompt(_: str) -> Summary:  # type: ignore[return-value]
+        return "Return a summary"
+
+    out = prompt("x")
+    assert isinstance(out, Summary)
+    assert out.summary == "hi"
+    assert calls["completion"][0]["response_format"] is Summary
+
+
 def test_llm_decorator_rejects_non_str_prompt(monkeypatch):
     _install_fake_litellm(
         monkeypatch,

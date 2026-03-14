@@ -23,6 +23,179 @@ Each subpackage’s README documents its own dependency behavior.
 
 ## Decorators
 
+## All-in-one example ("kitchen sink")
+
+Below is a **single** (illustrative) snippet that uses *every* decorator (or
+decorator-like helper) exposed by this project at least once.
+
+It’s intentionally compact and mixes unrelated concerns (parsing, streaming,
+caching, ORM helpers, LLM calls, …) to serve as a quick tour.
+
+> Note: some parts require optional dependencies / services:
+> - `etl-decorators[csv|html|xml|redis|sqlalchemy|templating|llms]`
+> - a running Redis for `RedisCache`
+> - LLM credentials for real `LLM` calls
+
+```python
+from __future__ import annotations
+
+import io
+import sqlalchemy as sa
+from pydantic import BaseModel
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+
+from etl_decorators.csv import parse_csv
+from etl_decorators.html import parse_html
+from etl_decorators.json import parse_json, parse_jsonl
+from etl_decorators.logging import log
+from etl_decorators.llms import LLM
+from etl_decorators.redis import RedisCache
+from etl_decorators.resilience import retry, timeout
+from etl_decorators.sqlalchemy import JSON, as_model, field, materialized_property
+from etl_decorators.streams import batch, dedupe, keep, transform
+from etl_decorators.templating import template
+from etl_decorators.xml import parse_xml
+
+
+# -----------------
+# Parsing decorators
+# -----------------
+
+
+@parse_csv
+def extract_csv() -> str:
+    return "id;name\n1;Ada\n1;Ada\n2;Bob\n"
+
+
+@parse_json
+def extract_json() -> str:
+    return '{"items": [{"id": 1}, {"id": 2}]}'
+
+
+@parse_jsonl
+def extract_jsonl() -> io.StringIO:
+    return io.StringIO('{"id": 1}\n{"id": 2}\n')
+
+
+@parse_html(extract="h1")
+def extract_html_title() -> str:
+    return "<html><body><h1>Hello</h1></body></html>"
+
+
+@parse_xml(extract="//item", extract_as_collection=True)
+def extract_xml_items() -> str:
+    return "<root><item>a</item><item>b</item></root>"
+
+
+# ------------------
+# Stream decorators
+# ------------------
+
+
+@transform(lambda row: {**row, "name": row["name"].upper()})
+@dedupe(key=lambda row: row["id"])
+@keep(lambda row: row["id"] > 0)
+@batch(size=2)
+def stream_rows():
+    # parse_csv yields dict rows; these stream decorators stay lazy
+    yield from extract_csv()
+
+
+# ------------------
+# Resilience + logging
+# ------------------
+
+
+@log(level="INFO", with_arguments=True, with_result=False)
+@retry(retry_on=RuntimeError, max_attempts=3, interval=0.2)
+@timeout(seconds=5)
+def load_batch(rows: list[dict]) -> int:
+    # pretend to load rows somewhere
+    return len(rows)
+
+
+# ------------------
+# Redis caching
+# ------------------
+
+
+cache = RedisCache(url="redis://localhost:6379/0", prefix="etl_decorators.demo")
+
+
+@cache(read_ttl=60, write_ttl=60, serialization="json")
+def cached_reference_data() -> dict:
+    # expensive lookup
+    return {"countries": ["FR", "US"]}
+
+
+# ------------------
+# SQLAlchemy helpers
+# ------------------
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+@as_model(Base)
+class Document:
+    # `field(...)` lets you pass mapped_column kwargs / defaults
+    external_id: str = field(unique=True, index=True)
+    meta: JSON = field(default_factory=lambda: {"source": "demo"})
+
+
+class Summary(BaseModel):
+    summary: str
+
+
+llm = LLM(model="openai/gpt-4o-mini")
+
+
+class Article(Base):
+    __tablename__ = "articles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(sa.String)
+
+    # decorator stacking order (bottom-up):
+    # template -> llm -> materialized_property
+    @materialized_property
+    @llm(return_type=Summary)
+    @template
+    def summary(self) -> str:
+        return "Return JSON with a short summary for: {{ self.title }}"
+
+
+def main() -> None:
+    # Parsing outputs
+    _title_tag = extract_html_title()  # bs4.Tag | None
+    _items = extract_xml_items()  # list[str]
+    _payload = extract_json()
+    _events = list(extract_jsonl())
+
+    # Stream processing
+    for rows in stream_rows():
+        load_batch(rows)
+
+    # Redis memoization
+    _ref = cached_reference_data()
+
+    # SQLAlchemy materialization demo (SQLite)
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        a = Article(title="Hello world")
+        session.add(a)
+        session.flush()
+
+        # first access triggers compute + flush
+        _ = a.summary
+
+
+if __name__ == "__main__":
+    main()
+```
+
 ### Parsing
 
 #### `etl_decorators.csv`

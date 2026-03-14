@@ -54,6 +54,47 @@ with Session(engine) as session:
   - `list[MappedClass]` => generated association table preserving order
 - The computation requires the instance to be attached to a SQLAlchemy `Session`.
 
+### Using with other decorators (stacking)
+
+`materialized_property` can be composed with other decorators, but there are
+two important rules:
+
+1. The compute function's (decorated) runtime return annotation must reflect
+   the **actual value** returned by the compute callable. This library inspects
+   that return type to decide how to store the materialized value.
+2. Decorator order matters: Python applies decorators **bottom-up**.
+
+#### Example: `template` + `LLM` + `materialized_property`
+
+```python
+from pydantic import BaseModel
+from etl_decorators.llms import LLM
+from etl_decorators.templating import template
+from etl_decorators.sqlalchemy import materialized_property
+
+
+class Summary(BaseModel):
+    summary: str
+
+
+llm = LLM(model="gpt-4o-mini")
+
+
+class Model(Base):
+    name: Mapped[str]
+
+    @materialized_property
+    @llm(return_type=Summary)
+    @template
+    def summary(self) -> str:
+        return "Return JSON with a summary for {{ self.name }}"
+```
+
+This yields the pipeline:
+
+`template` (render prompt str) → `LLM` (call model, return Summary) →
+`materialized_property` (persist Summary in DB as JSON)
+
 ## Cache semantics
 
 `materialized_property` is a *cache stored in the database*.

@@ -1,9 +1,28 @@
-"""LLM decorator implementation."""
+"""LLM decorator implementation.
+
+Notes on typing / interoperability
+-------------------------------
+
+Some other decorators in this repository (notably
+``etl_decorators.sqlalchemy.materialized_property``) inspect the *runtime*
+return annotation of the decorated callable (via ``__annotations__`` and/or
+``typing.get_type_hints``) to decide how to store results.
+
+When decorating prompt builders, :class:`~etl_decorators.llms.LLM` therefore:
+
+- optionally infers a structured output ``return_type`` from the function's
+  annotated return type when it is a ``pydantic.BaseModel`` subclass, and
+- rewrites the wrapped callable's runtime ``__annotations__["return"]`` to
+  reflect the actual output type of the decorated callable.
+
+This makes decorator stacking possible (e.g. ``@materialized_property`` on top
+of an ``@llm(return_type=...)`` function).
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, ParamSpec, overload
+from typing import Any, Awaitable, Callable, ParamSpec, get_type_hints, overload
 
 from etl_decorators._base.decorators import DecoratorBase
 
@@ -72,12 +91,43 @@ class LLM:
 
     def _decorate(self, fn: Any, *, return_type: Any):
         model_t: type[BaseModel] | None = None
+
+        # 1) Explicit return_type=... always wins.
         if return_type is not _MISSING:
             # If user explicitly passes return_type=None, we want a clear error.
             if return_type is None:
                 require_pydantic_model(return_type)
             else:
                 model_t = require_pydantic_model(return_type)
+        else:
+            # 2) Best-effort inference from the prompt function's return
+            #    annotation.
+            #
+            # This enables ergonomic stacking:
+            #
+            #   @materialized_property
+            #   @llm
+            #   def summary(self) -> Summary:
+            #       return "..."  # template / prompt
+            #
+            # Note: static type checkers may complain inside the prompt builder
+            # because it returns str, but runtime semantics are correct.
+            try:
+                hints = get_type_hints(
+                    fn,
+                    globalns=getattr(fn, "__globals__", None),
+                    localns=None,
+                )
+                ann = hints.get("return")
+            except Exception:
+                ann = getattr(fn, "__annotations__", {}).get("return")
+
+            if ann is not None:
+                try:
+                    model_t = require_pydantic_model(ann)
+                except TypeError:
+                    # Not a pydantic model => treat as text mode.
+                    model_t = None
 
         class _LLMDecorator(DecoratorBase[P, Any, None]):
             def process_result(
@@ -107,7 +157,16 @@ class LLM:
                 return await self_outer.request_async(prompt, return_type=model_t)
 
         self_outer = self
-        return _LLMDecorator().decorate(fn)
+        decorated = _LLMDecorator().decorate(fn)
+
+        # Ensure the decorated callable advertises the *actual* return type at
+        # runtime. This helps other decorators which inspect annotations.
+        if model_t is not None:
+            ann = dict(getattr(decorated, "__annotations__", {}) or {})
+            ann["return"] = model_t
+            decorated.__annotations__ = ann
+
+        return decorated
 
     def request(self, prompt: str, *, return_type: type[BaseModel] | None):
         try:

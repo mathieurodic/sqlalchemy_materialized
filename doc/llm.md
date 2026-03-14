@@ -112,3 +112,56 @@ llm = LLM(
 - Structured-output support depends on litellm/provider capabilities.
 - The wrapper includes a few defensive extraction paths to read either text
   output or structured output from the returned response.
+
+## Decorator stacking / interoperability
+
+### Inferring structured output from annotations
+
+When you don't pass `return_type=...`, `LLM` will **infer** structured output
+from the prompt builder's annotated return type when it is a
+`pydantic.BaseModel` subclass.
+
+```python
+from pydantic import BaseModel
+from etl_decorators.llms import LLM
+
+
+class Summary(BaseModel):
+    summary: str
+
+
+llm = LLM(model="gpt-4o-mini")
+
+
+@llm
+def summarize(text: str) -> Summary:  # type: ignore[return-value]
+    return f"Return JSON with a summary of: {text}"
+```
+
+Note: because the function body still returns a prompt `str`, static type
+checkers may complain. Use `@llm(return_type=Summary)` if you'd rather keep the
+prompt builder annotated as `-> str`.
+
+### Stacking with `materialized_property`
+
+`etl_decorators.sqlalchemy.materialized_property` inspects runtime return
+annotations to choose storage types. `LLM` therefore rewrites the wrapped
+callable's runtime `__annotations__["return"]` to reflect the *actual* decorated
+return type when using structured output.
+
+This enables patterns like:
+
+```python
+from etl_decorators.sqlalchemy import materialized_property
+
+
+class Model(Base):
+    @materialized_property
+    @llm(return_type=Summary)
+    def summary(self) -> str:
+        return "Return a summary"
+```
+
+Important: prefer decorator order bottom-up as:
+`@template` (prompt rendering) -> `@llm` (LLM call) -> `@materialized_property`
+(DB caching).
