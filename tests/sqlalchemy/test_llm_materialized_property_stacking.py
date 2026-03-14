@@ -128,3 +128,58 @@ def test_template_llm_materialized_property_pipeline(monkeypatch):
         assert calls["completion"][0]["messages"][0]["content"] == (
             "Return a summary for Ada"
         )
+
+
+def test_materialized_property_on_top_of_llm_wrapped_scalar_uses_native_storage(
+    monkeypatch,
+):
+    """LLM wrapper mode should be stackable with materialized_property.
+
+    We expect:
+    - @llm(return_type=int) uses an Answer(result=int) wrapper internally
+    - the decorated callable advertises `-> int` at runtime
+    - materialized_property stores it as an Integer column (not JSON)
+    """
+
+    calls = _install_fake_litellm(monkeypatch, parsed={"result": 42})
+
+    from etl_decorators.llms import LLM
+    from etl_decorators.sqlalchemy import materialized_property
+
+    llm = LLM(model="fake")
+
+    class Base(DeclarativeBase):
+        pass
+
+    class Model(Base):
+        __tablename__ = "llm_mat_prop_scalar"
+        __allow_unmapped__ = True
+
+        id: Mapped[int] = mapped_column(primary_key=True)
+
+        @materialized_property
+        @llm(return_type=int)
+        def answer(self) -> str:
+            return "Return an integer"  # prompt
+
+    sa.orm.configure_mappers()
+    col = Model.__table__.c.answer
+    assert col.type.__class__.__name__ == "Integer"
+
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        m = Model()
+        session.add(m)
+        session.flush()
+
+        out1 = m.answer
+        assert out1 == 42
+        assert isinstance(out1, int)
+        assert len(calls["completion"]) == 1
+
+        out2 = m.answer
+        assert out2 == 42
+        assert isinstance(out2, int)
+        assert len(calls["completion"]) == 1

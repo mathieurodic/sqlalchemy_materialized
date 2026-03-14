@@ -22,7 +22,7 @@ of an ``@llm(return_type=...)`` function).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, ParamSpec, get_type_hints, overload
+from typing import Any, Awaitable, Callable, ParamSpec, get_origin, get_type_hints, overload
 
 from etl_decorators._base.decorators import DecoratorBase
 
@@ -43,6 +43,55 @@ _AsyncPromptFn = Callable[P, Awaitable[str]]
 
 
 _MISSING = object()
+
+
+def _is_pydantic_model_subclass(t: Any) -> bool:
+    # `BaseModel` is `object` when pydantic isn't installed.
+    return (
+        BaseModel is not object
+        and isinstance(t, type)
+        and issubclass(t, BaseModel)
+    )
+
+
+def _make_answer_wrapper(expected_t: Any) -> type[BaseModel]:
+    """Create a Pydantic wrapper model: Answer(result: expected_t)."""
+
+    try:
+        from pydantic import create_model
+    except Exception as e:  # pragma: no cover
+        raise RuntimeError(
+            "pydantic is required for etl_decorators.llms structured output. "
+            "Install with: pip install etl-decorators[llms]"
+        ) from e
+
+    return create_model("Answer", result=(expected_t, ...))
+
+
+def _require_type_annotation(t: Any) -> Any:
+    """Validate that `t` looks like a type annotation.
+
+    We accept both real classes (e.g. `int`) and typing constructs
+    (e.g. `list[str]`, `dict[str, int]`, `Optional[int]`, ...).
+    """
+
+    if t is None:
+        raise TypeError("return_type cannot be None")
+
+    # Disallow passing forward-ref strings explicitly; inference handles those.
+    if isinstance(t, str):
+        raise TypeError(
+            "return_type must be a type annotation; received a string forward reference"
+        )
+
+    if isinstance(t, type):
+        return t
+
+    # typing constructs (Union, list[str], Annotated, etc.)
+    if t is Any or get_origin(t) is not None:
+        return t
+
+    raise TypeError(f"return_type must be a type annotation; received: {t!r}")
 
 
 @dataclass(frozen=True)
@@ -90,15 +139,37 @@ class LLM:
         return self._decorate(fn, return_type=return_type)
 
     def _decorate(self, fn: Any, *, return_type: Any):
+        # `expected_t` is what the decorated callable should return / advertise
+        # at runtime.
+        expected_t: Any = str
+
+        # `model_t` is the Pydantic model used for structured extraction.
         model_t: type[BaseModel] | None = None
+
+        # Optional unwrapping step when we use an Answer(result=...) wrapper.
+        unwrap_result: bool = False
 
         # 1) Explicit return_type=... always wins.
         if return_type is not _MISSING:
             # If user explicitly passes return_type=None, we want a clear error.
             if return_type is None:
                 require_pydantic_model(return_type)
+            elif return_type is str:
+                # Explicit text mode.
+                expected_t = str
+                model_t = None
             else:
-                model_t = require_pydantic_model(return_type)
+                return_type = _require_type_annotation(return_type)
+                # Structured output:
+                # - BaseModel subclass => return it directly
+                # - any other expected type => wrap it into Answer(result=...)
+                if _is_pydantic_model_subclass(return_type):
+                    expected_t = return_type
+                    model_t = require_pydantic_model(return_type)
+                else:
+                    expected_t = return_type
+                    model_t = _make_answer_wrapper(return_type)
+                    unwrap_result = True
         else:
             # 2) Best-effort inference from the prompt function's return
             #    annotation.
@@ -123,11 +194,25 @@ class LLM:
                 ann = getattr(fn, "__annotations__", {}).get("return")
 
             if ann is not None:
-                try:
-                    model_t = require_pydantic_model(ann)
-                except TypeError:
-                    # Not a pydantic model => treat as text mode.
+                # When __future__.annotations is enabled and get_type_hints fails,
+                # we may see a string forward ref here; preserve historical
+                # behavior and fall back to text mode.
+                if ann is str or isinstance(ann, str):
+                    expected_t = str
                     model_t = None
+                elif _is_pydantic_model_subclass(ann):
+                    expected_t = ann
+                    try:
+                        model_t = require_pydantic_model(ann)
+                    except TypeError:
+                        # Defensive fallback (should not happen if _is_pydantic_model_subclass is correct)
+                        model_t = None
+                        expected_t = str
+                else:
+                    # Any other annotation => wrapper mode.
+                    expected_t = ann
+                    model_t = _make_answer_wrapper(ann)
+                    unwrap_result = True
 
         class _LLMDecorator(DecoratorBase[P, Any, None]):
             def process_result(
@@ -141,7 +226,11 @@ class LLM:
                 prompt = require_str_prompt(
                     result, fn_name=getattr(f, "__name__", "<fn>")
                 )
-                return self_outer.request(prompt, return_type=model_t)
+                out = self_outer.request(prompt, return_type=model_t)
+                if unwrap_result and model_t is not None:
+                    # mypy: model_t is a BaseModel subclass with a `result` field.
+                    return getattr(out, "result")
+                return out
 
             async def process_result_async(
                 self,
@@ -154,17 +243,19 @@ class LLM:
                 prompt = require_str_prompt(
                     result, fn_name=getattr(f, "__name__", "<fn>")
                 )
-                return await self_outer.request_async(prompt, return_type=model_t)
+                out = await self_outer.request_async(prompt, return_type=model_t)
+                if unwrap_result and model_t is not None:
+                    return getattr(out, "result")
+                return out
 
         self_outer = self
         decorated = _LLMDecorator().decorate(fn)
 
         # Ensure the decorated callable advertises the *actual* return type at
         # runtime. This helps other decorators which inspect annotations.
-        if model_t is not None:
-            ann = dict(getattr(decorated, "__annotations__", {}) or {})
-            ann["return"] = model_t
-            decorated.__annotations__ = ann
+        ann = dict(getattr(decorated, "__annotations__", {}) or {})
+        ann["return"] = expected_t
+        decorated.__annotations__ = ann
 
         return decorated
 

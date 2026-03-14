@@ -137,14 +137,23 @@ def test_llm_decorator_rejects_non_str_prompt(monkeypatch):
         prompt()
 
 
-def test_llm_decorator_rejects_invalid_return_type():
+def test_llm_decorator_accepts_str_return_type(monkeypatch):
     llm = LLM(model="fake")
 
-    with pytest.raises(TypeError, match="return_type must be a pydantic.BaseModel subclass"):
+    calls = _install_fake_litellm(
+        monkeypatch=monkeypatch,
+        completion_resp={"choices": [{"message": {"content": "ok"}}]},
+    )
 
-        @llm(return_type=str)  # type: ignore[arg-type]
-        def prompt() -> str:
-            return "x"
+    # return_type=str is supported as explicit text mode
+    @llm(return_type=str)
+    def prompt() -> str:
+        return "x"
+
+    assert prompt() == "ok"
+
+    # Ensure we did NOT request structured output.
+    assert "response_format" not in calls["completion"][0]
 
 
 def test_llm_decorator_rejects_none_return_type():
@@ -160,7 +169,7 @@ def test_llm_decorator_rejects_none_return_type():
 def test_llm_decorator_rejects_non_type_return_type():
     llm = LLM(model="fake")
 
-    with pytest.raises(TypeError, match="return_type must be a pydantic.BaseModel subclass"):
+    with pytest.raises(TypeError, match="return_type must be a type annotation"):
 
         @llm(return_type=object())  # type: ignore[arg-type]
         def prompt() -> str:
@@ -302,3 +311,43 @@ def test_llm_async_requires_acompletion(monkeypatch):
 
     with pytest.raises(RuntimeError, match="does not expose `acompletion`"):
         asyncio.run(prompt())
+
+
+def test_llm_decorator_sync_wrapped_scalar(monkeypatch):
+    calls = _install_fake_litellm(
+        monkeypatch,
+        completion_resp={"choices": [{"message": {"parsed": {"result": 123}}}]},
+    )
+
+    llm = LLM(model="fake")
+
+    @llm(return_type=int)
+    def prompt() -> str:
+        return "Return an integer"
+
+    out = prompt()
+    assert out == 123
+    assert isinstance(out, int)
+    assert "response_format" in calls["completion"][0]
+
+    # The decorated callable should advertise the inner type (int), not the wrapper model.
+    assert prompt.__annotations__["return"] is int
+
+
+def test_llm_infers_wrapped_scalar_from_annotation(monkeypatch):
+    calls = _install_fake_litellm(
+        monkeypatch,
+        completion_resp={"choices": [{"message": {"parsed": {"result": 7}}}]},
+    )
+
+    llm = LLM(model="fake")
+
+    @llm
+    def prompt() -> int:  # type: ignore[return-value]
+        return "Return an integer"
+
+    out = prompt()
+    assert out == 7
+    assert isinstance(out, int)
+    assert "response_format" in calls["completion"][0]
+    assert prompt.__annotations__["return"] is int

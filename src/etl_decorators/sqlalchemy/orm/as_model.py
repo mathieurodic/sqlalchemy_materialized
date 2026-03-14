@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import sys
+from datetime import datetime
 from typing import Any, Callable, get_type_hints
 
 import sqlalchemy as sa
@@ -12,6 +13,7 @@ from ..materialized.helpers import _is_mapped_class
 from ..utils.typing import unwrap_optional
 from .columns import make_sa_column
 from .field import _Field, _MISSING
+from .soft_delete import register_soft_delete_model, soft_delete_instance
 
 
 def _default_tablename(cls: type) -> str:
@@ -44,13 +46,34 @@ def _resolve_hints_with_extra(cls: type, extra_localns: dict[str, Any] | None = 
     return get_type_hints(cls, globalns=globalns, localns=localns)
 
 
-def as_model(Base: type, tablename: str | None = None):
+def as_model(
+    Base: type,
+    tablename: str | None = None,
+    *,
+    with_primary_key: str | None = "id",
+    with_creation_timestamp: str | None = None,
+    with_modification_timestamp: str | None = None,
+    with_soft_deletion: str | None = None,
+    with_timestamps: bool = False,
+):
     """Decorator turning a plain annotated class into a SQLAlchemy model.
 
     See `doc/as_model.md` for user documentation.
     """
 
     def _decorate(cls: type):
+        nonlocal with_creation_timestamp
+        nonlocal with_modification_timestamp
+        nonlocal with_soft_deletion
+
+        if with_timestamps:
+            if with_creation_timestamp is None:
+                with_creation_timestamp = "created_at"
+            if with_modification_timestamp is None:
+                with_modification_timestamp = "updated_at"
+            if with_soft_deletion is None:
+                with_soft_deletion = "deleted_at"
+
         frame = inspect.currentframe()
         caller_locals = frame.f_back.f_locals if frame and frame.f_back else None
         hints = _resolve_hints_with_extra(cls, dict(caller_locals) if caller_locals else None)
@@ -68,10 +91,13 @@ def as_model(Base: type, tablename: str | None = None):
         namespace["__allow_unmapped__"] = True
         namespace["__module__"] = cls.__module__
 
-        # Always add an integer PK unless the user already defined one.
-        if "id" not in namespace:
-            mapped_annotations["id"] = Mapped[int]
-            namespace["id"] = sa.orm.mapped_column(sa.Integer, primary_key=True)
+        # Add a primary key unless disabled or already defined on the class.
+        if with_primary_key is not None and with_primary_key not in namespace:
+            mapped_annotations[with_primary_key] = Mapped[int]
+            namespace[with_primary_key] = sa.orm.mapped_column(
+                sa.Integer,
+                primary_key=True,
+            )
 
         defaults: dict[str, Any] = {}
         factories: dict[str, Callable[..., Any]] = {}
@@ -94,6 +120,27 @@ def as_model(Base: type, tablename: str | None = None):
 
         # First pass: inject columns + forward relationships.
         rel_specs: list[tuple[str, type, bool, dict[str, Any]]] = []
+        if with_creation_timestamp and with_creation_timestamp not in namespace:
+            mapped_annotations[with_creation_timestamp] = Mapped[datetime]
+            namespace[with_creation_timestamp] = sa.orm.mapped_column(
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            )
+
+        if with_modification_timestamp and with_modification_timestamp not in namespace:
+            mapped_annotations[with_modification_timestamp] = Mapped[datetime | None]
+            namespace[with_modification_timestamp] = sa.orm.mapped_column(
+                sa.DateTime(timezone=True),
+                nullable=True,
+            )
+
+        if with_soft_deletion and with_soft_deletion not in namespace:
+            mapped_annotations[with_soft_deletion] = Mapped[datetime | None]
+            namespace[with_soft_deletion] = sa.orm.mapped_column(
+                sa.DateTime(timezone=True),
+                nullable=True,
+            )
         for name, ann in hints.items():
             # Skip private-ish names.
             if name.startswith("_"):
@@ -143,6 +190,26 @@ def as_model(Base: type, tablename: str | None = None):
 
         # Create the mapped class.
         model_cls = type(cls.__name__, (Base,), namespace)
+
+        if with_soft_deletion:
+            register_soft_delete_model(model_cls, with_soft_deletion)
+
+            def delete(self):  # type: ignore[no-redef]
+                soft_delete_instance(self)
+
+            model_cls.delete = delete  # type: ignore[assignment]
+
+        if with_modification_timestamp:
+            updated_attr = with_modification_timestamp
+
+            model_cls.__etl_updated_at_attr__ = updated_attr
+
+            @sa.event.listens_for(model_cls, "before_update")
+            def _update_modification_timestamp(mapper, connection, target):  # noqa: ANN001
+                if getattr(target, "_etl_skip_updated_at", False):
+                    target._etl_skip_updated_at = False
+                    return
+                setattr(target, updated_attr, sa.func.now())
 
         # Second pass: inject reverse relationships onto targets.
         for name, target_cls, _is_optional, spec in rel_specs:

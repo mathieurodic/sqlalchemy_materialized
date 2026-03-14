@@ -98,6 +98,88 @@ Supported out of the box:
 
 If a type is not supported, `as_model` raises a `TypeError`.
 
+## Automatic columns and behaviors
+
+`as_model` can add common ETL-friendly columns automatically. All flags are
+optional, and any column already declared on the class takes precedence.
+
+```python
+@as_model(
+    Base,
+    with_primary_key="id",
+    with_creation_timestamp="created_at",
+    with_modification_timestamp="updated_at",
+    with_soft_deletion="deleted_at",
+)
+class Document:
+    title: str
+```
+
+### Primary key
+
+`with_primary_key: str | None = "id"`
+
+- When set to a string (default: `"id"`), `as_model` injects a primary key
+  column with that name unless already present on the class.
+- When set to `None`, no automatic primary key column is added.
+
+### Creation timestamp
+
+`with_creation_timestamp: str | None = None`
+
+If provided, `as_model` adds a `DateTime(timezone=True)` column with a
+database default of `NOW()` (via `server_default=sa.func.now()`).
+
+### Modification timestamp
+
+`with_modification_timestamp: str | None = None`
+
+If provided, `as_model` adds a nullable `DateTime(timezone=True)` column. The
+initial value is `NULL` and it is set automatically on real UPDATEs (soft
+delete does **not** set it).
+
+### Soft deletion
+
+`with_soft_deletion: str | None = None`
+
+If provided, `as_model` adds a nullable `DateTime(timezone=True)` column used
+as a soft-deletion marker and enables soft-delete behavior.
+
+- `Session.delete(obj)` and `obj.delete()` update the column to `NOW()` instead
+  of issuing a DELETE.
+- Queries automatically filter out soft-deleted rows (where the column is not
+  `NULL`).
+- Call `session.with_deleted()` to disable this filter for a query.
+
+The soft-delete logic is implemented in a dedicated helper module and must be
+enabled for a session (see below).
+
+### with_timestamps
+
+`with_timestamps: bool = False`
+
+Convenience flag. When `True`, it behaves as if you set:
+
+- `with_creation_timestamp="created_at"`
+- `with_modification_timestamp="updated_at"`
+- `with_soft_deletion="deleted_at"`
+
+### Enabling soft-delete on a Session
+
+Soft deletion relies on Session hooks. Use the helper in
+`etl_decorators.sqlalchemy.orm.soft_delete`:
+
+```python
+from sqlalchemy.orm import Session
+from etl_decorators.sqlalchemy.orm.soft_delete import enable_soft_delete
+
+session = Session(engine)
+enable_soft_delete(session)
+
+session.query(Document).all()      # excludes deleted
+session.with_deleted().query(Document).all()  # includes deleted
+```
+
 ## Relationships
 
 If an annotation refers to another mapped model class, `as_model` generates:

@@ -141,6 +141,7 @@ class Base(DeclarativeBase):
 class Document:
     # `field(...)` lets you pass mapped_column kwargs / defaults
     external_id: str = field(unique=True, index=True)
+    title: str
     meta: JSON = field(default_factory=lambda: {"source": "demo"})
 
 
