@@ -25,6 +25,20 @@ def test_timeout_sync_preserves_return_value():
     assert fast() == 1
 
 
+def test_timeout_sync_propagates_exception_from_wrapped_function():
+    from etl_decorators.resilience import timeout
+
+    class Boom(RuntimeError):
+        pass
+
+    @timeout(seconds=0.5)
+    def bad() -> None:
+        raise Boom("kaboom")
+
+    with pytest.raises(Boom, match="kaboom"):
+        bad()
+
+
 def test_timeout_sync_seconds_validation():
     from etl_decorators.resilience import timeout
 

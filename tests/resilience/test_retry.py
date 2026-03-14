@@ -214,6 +214,40 @@ def test_retry_async_retries_then_succeeds(monkeypatch):
     assert sleeps == [0.25, 0.5]
 
 
+def test_retry_async_on_retry_is_called_and_then_raises(monkeypatch):
+    from etl_decorators.resilience import retry
+    retry_mod = importlib.import_module("etl_decorators.resilience.retry")
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(s: float) -> None:
+        sleeps.append(s)
+
+    monkeypatch.setattr(retry_mod.asyncio, "sleep", fake_sleep)
+
+    events: list[tuple[str, int, float]] = []
+
+    def on_retry(exc: BaseException, attempt: int, sleep: float) -> None:
+        events.append((exc.__class__.__name__, attempt, sleep))
+
+    @retry(
+        retry_on=TransientError,
+        max_attempts=2,
+        interval=0.1,
+        factor=1.0,
+        on_retry=on_retry,
+    )
+    async def always_fail() -> None:
+        raise TransientError("boom")
+
+    with pytest.raises(TransientError, match="boom"):
+        asyncio.run(always_fail())
+
+    # 2 attempts total => 1 retry sleep/hook
+    assert sleeps == [0.1]
+    assert events == [("TransientError", 1, 0.1)]
+
+
 def test_retry_requires_policy():
     from etl_decorators.resilience import retry
 

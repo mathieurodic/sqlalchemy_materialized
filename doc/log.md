@@ -5,9 +5,12 @@ stdlib logging.
 
 It emits:
 
-- a **start** log line before executing the function
-- an **end** log line after completion
-- or a **failed** log line (with traceback) when an exception is raised
+- a **START** log line before executing the function
+- a **DONE** log line after completion
+- or an **ERROR** log line (with traceback) when an exception is raised
+
+Each invocation gets a short *run id* (8 hex chars) so you can correlate the
+START/DONE/ERROR lines for a given call.
 
 ## Basic usage
 
@@ -21,6 +24,10 @@ def extract(org_id: str) -> list[int]:
 
 
 _ = extract("acme")
+
+# Example log lines:
+# [START 1a2b3c4d] @my_module.py:12 extract(org_id='acme')
+# [DONE  1a2b3c4d] @my_module.py:12 extract: duration=0.012345s
 ```
 
 ## Parameters
@@ -34,6 +41,8 @@ _ = extract("acme")
   - include a safe/truncated representation of bound arguments
 - `with_duration: bool = True`
   - include duration in seconds (using `time.perf_counter()`)
+- `with_location: bool = True`
+  - include `@<filename>:<line>` where the decorated function is defined
 
 ## Async functions
 

@@ -14,6 +14,7 @@ from pathlib import Path
 
 import os
 import warnings
+import uuid
 
 import pytest
 
@@ -126,3 +127,72 @@ def llm():
     from etl_decorators.llms import LLM
 
     return LLM(model=model, api_key=api_key)
+
+
+@pytest.fixture
+def redis_url() -> str:
+    url = os.getenv("ETL_DECORATORS_TESTS_REDIS_URL")
+    if not url:
+        warnings.warn(
+            "Redis integration tests skipped: set ETL_DECORATORS_TESTS_REDIS_URL "
+            "(you can use a local .env file).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        pytest.skip("Redis integration tests not configured")
+    return url
+
+
+@pytest.fixture
+def redis_cache():
+    """Return a RedisCache backed by fakeredis (unit tests).
+
+    This fixture is always available and does not require a live Redis.
+    """
+
+    try:
+        import fakeredis
+    except Exception:  # pragma: no cover
+        pytest.skip("fakeredis is not installed")
+
+    from etl_decorators.redis import RedisCache
+
+    # Patch callsite_code_hash so unit tests don't depend on the physical
+    # location of `@cache(...)` in this file.
+    import etl_decorators.redis.cache as cache_mod
+
+    object.__setattr__(cache_mod, "callsite_code_hash", lambda **_: "testhash")
+
+    cache = RedisCache(url="redis://fakeredis", prefix=f"etl_constructor.redis.cache.tests:{uuid.uuid4().hex}")
+
+    sync_client = fakeredis.FakeRedis()
+    async_client = fakeredis.aioredis.FakeRedis()
+
+    # Monkeypatch methods on the instance.
+    object.__setattr__(cache, "_sync_client", lambda: sync_client)
+    object.__setattr__(cache, "_async_client", lambda: async_client)
+
+    return cache
+
+
+@pytest.fixture
+def redis_cache_integration(redis_url: str):
+    # Also require optional dependency.
+    try:
+        import redis  # noqa: F401
+    except Exception:
+        warnings.warn(
+            "Redis integration tests skipped: `redis` is not installed. "
+            "Install with: pip install etl-decorators[redis]",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        pytest.skip("Redis integration tests require redis")
+
+    from etl_decorators.redis import RedisCache
+
+    # Use a unique prefix per test session to avoid collisions and to avoid
+    # having to flush the whole Redis DB.
+    cache = RedisCache(url=redis_url, prefix=f"etl_constructor.redis.cache.tests:{uuid.uuid4().hex}")
+
+    return cache

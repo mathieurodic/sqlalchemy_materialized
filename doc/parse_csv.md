@@ -28,6 +28,61 @@ assert rows == [
     {"name": "Alice", "age": 30},
     {"name": "Bob", "age": 41},
 ]
+
+```
+
+## Returning tuples instead of dicts
+
+If you set `as_dict=False`, the decorator yields **tuples** instead of dicts.
+This can be useful when:
+
+- your CSV has no header row
+- you want positional data
+
+```python
+from etl_decorators.csv import parse_csv
+
+
+@parse_csv(as_dict=False)
+def get_csv() -> str:
+    return "a,b\n1,2\n3,4\n"
+
+
+rows = list(get_csv())
+assert rows == [
+    (1, 2),
+    (3, 4),
+]
+```
+
+By default, `skip_header_rows=1`, so with `as_dict=False` the first row is
+skipped (which is commonly the header row, even though it is not used).
+
+If you want to include the first row as data, use `skip_header_rows=0`.
+
+## Skipping preamble/header rows (`skip_header_rows`)
+
+`skip_header_rows` controls where **data** starts (0-based index):
+
+- when `as_dict=True` (default):
+  - the header row is at index `skip_header_rows - 1`
+  - yielded data rows start at index `skip_header_rows`
+- when `as_dict=False`:
+  - yielded data rows start at index `skip_header_rows`
+
+Example: one preamble line, then header, then data.
+
+```python
+from etl_decorators.csv import parse_csv
+
+
+@parse_csv(skip_header_rows=2)
+def get_csv() -> str:
+    return "THIS IS A REPORT\nx,y\n1,2\n"
+
+
+assert list(get_csv()) == [{"x": 1, "y": 2}]
+
 ```
 
 The decorated callable accepts three kinds of return values:

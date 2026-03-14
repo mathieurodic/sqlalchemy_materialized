@@ -41,12 +41,32 @@ csv = [
 templating = [
     "jinja2",
 ]
+redis = [
+    "redis>=5",
+]
+xml = [
+    "lxml",
+    "cssselect",
+]
 test = [
     "pytest",
     "pytest-cov",
     "python-dotenv",
-    # tests currently cover the SQLAlchemy subpackage
-    "etl-decorators[sqlalchemy,llms,html,csv,templating]",
+    "fakeredis",
+    # Keep test environment fully-featured by including all optional deps.
+    # NOTE: Avoid self-referential extras (e.g. "etl-decorators[xml]") here,
+    # as some installers may skip/ignore them when resolving the current
+    # package. Listing deps explicitly keeps `pip install -e .[test]` reliable.
+    "sqlalchemy>=1.4",
+    "pydantic>=2",
+    "litellm",
+    "beautifulsoup4",
+    "markdownify",
+    "pandas>=2",
+    "jinja2",
+    "redis>=5",
+    "lxml",
+    "cssselect",
 ]
 
 [tool.setuptools.packages.find]

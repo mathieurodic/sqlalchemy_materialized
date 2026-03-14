@@ -1,6 +1,48 @@
 import pytest
 
 
+def test_retry_validate_config_retry_on_class_not_exception_raises():
+    from etl_decorators.resilience import retry
+
+    class NotAnException:  # noqa: N801 - test-only
+        pass
+
+    with pytest.raises(TypeError, match="exception class"):
+        retry(retry_on=NotAnException)(lambda: None)  # type: ignore[misc]
+
+
+def test_retry_is_fatal_exception_cancelled_error():
+    retry_mod = __import__("etl_decorators.resilience.retry", fromlist=["_is_fatal_exception"])
+
+    # asyncio.CancelledError should never be retried.
+    import asyncio
+
+    assert retry_mod._is_fatal_exception(asyncio.CancelledError()) is True
+
+
+def test_retry_should_retry_tuple_and_none_branch():
+    retry_mod = __import__("etl_decorators.resilience.retry", fromlist=["_should_retry"])
+
+    class A(RuntimeError):
+        pass
+
+    class B(RuntimeError):
+        pass
+
+    # The public decorator forbids retry_on=None and retry_if=None together, but
+    # _should_retry still needs to behave defensively.
+    assert (
+        retry_mod._should_retry(A("x"), retry_on=None, retry_if=None) is False
+    )
+
+    # tuple retry_on branch
+    assert retry_mod._should_retry(A("x"), retry_on=(A, B), retry_if=None) is True
+    assert (
+        retry_mod._should_retry(ValueError("x"), retry_on=(A, B), retry_if=None)
+        is False
+    )
+
+
 def test_retry_validate_config_retry_on_tuple_empty_raises():
     from etl_decorators.resilience import retry
 

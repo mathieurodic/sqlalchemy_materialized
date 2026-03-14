@@ -4,9 +4,8 @@ This repository (`etl-decorators`) provides small, focused decorators commonly u
 
 This TODO captures the next wave of decorators to build, based on the current documentation and the agreed scope:
 
-- **Extraction / IO**: `@fetch_url`, `@paginate`, `@read_file`, `@write_file`
-- **Parsing / normalization**: `@parse_json`, `@parse_jsonl`, `@parse_xml`, `@normalize_records`
-- **Streams**: `@batch`, `@map`, `@dedupe` (no windowing)
+- **Extraction / IO**: `@fetch`, `@paginate`, `@read_file`, `@write_file`
+- **Parsing / normalization**: `@normalize_records`
 
 ---
 
@@ -29,35 +28,26 @@ For each new decorator:
 Create new subpackages (some with optional dependencies, matching the project’s “extras + lazy import” approach):
 
 - `src/etl_decorators/http/` (**optional** extra: `etl-decorators[http]`)
-  - `__init__.py` exports `fetch_url`, `paginate`
-  - `fetch_url.py`
+  - `__init__.py` exports `fetch`, `paginate`
+  - `README.md`
+  - `fetch.py`
   - `paginate.py`
 
 - `src/etl_decorators/io/` (base)
   - `__init__.py` exports `read_file`, `write_file`
+  - `README.md`
   - `read_file.py`
   - `write_file.py`
 
-- `src/etl_decorators/json/` (base)
-  - `__init__.py` exports `parse_json`, `parse_jsonl`
-  - `parse_json.py`
-  - `parse_jsonl.py`
-
 - `src/etl_decorators/xml/` (**optional** extra: `etl-decorators[xml]`)
-  - `__init__.py` exports `parse_xml`
-  - `parse_xml.py`
+  - (implemented)
 
 - `src/etl_decorators/normalize/` (base)
   - `__init__.py` exports `normalize_records`
+  - `README.md`
   - `normalize_records.py`
 
 And keep the originally planned ones:
-
-- `src/etl_decorators/streams/`
-  - `__init__.py` exports `batch`, `map`, `dedupe`
-  - `batch.py`
-  - `map.py`
-  - `dedupe.py`
 
 Notes:
 
@@ -68,17 +58,17 @@ Notes:
 
 ## Decorators to implement
 
-### `etl_decorators.http.fetch_url`
+### `etl_decorators.http.fetch`
 
 **Goal**: Standardize HTTP fetching in ETL (timeouts, headers, retries, response parsing).
 
 **Target API**
 
 ```python
-from etl_decorators.http import fetch_url
+from etl_decorators.http import fetch
 
 
-@fetch_url(
+@fetch(
     method="GET",
     as_="text",  # "text" | "bytes" | "json"
     timeout=30,
@@ -103,7 +93,7 @@ def users_url(org_id: str) -> str:
 
 **Notes**
 
-- Keep `fetch_url` simple; prefer composing separate decorators around it.
+- Keep `fetch` simple; prefer composing separate decorators around it.
 
 **Tests**
 
@@ -114,7 +104,7 @@ def users_url(org_id: str) -> str:
 
 **Docs**
 
-- Add `doc/fetch_url.md`.
+- Add `doc/fetch.md`.
 
 ---
 
@@ -232,111 +222,6 @@ def build_users_dump() -> str:
 
 ---
 
-### `etl_decorators.json.parse_json`
-
-**Goal**: JSON equivalent of `parse_csv`/`parse_html`: accept `path | string | file-like` and return parsed JSON.
-
-**Target API**
-
-```python
-from etl_decorators.json import parse_json
-
-
-@parse_json
-def payload() -> str:
-    return '{"a": 1}'
-```
-
-**Requirements**
-
-- Accept return values:
-  - `pathlib.Path | str` (path)
-  - file-like with `.read()`
-  - JSON string
-- Return: `dict | list`.
-- Errors: raise `ValueError` (or a small library exception) with helpful context.
-
-**Tests**
-
-- Parses from string.
-- Parses from file.
-
-**Docs**
-
-- Add `doc/parse_json.md`.
-
----
-
-### `etl_decorators.json.parse_jsonl`
-
-**Goal**: Stream JSONL (newline-delimited JSON) as an iterator of dicts.
-
-**Target API**
-
-```python
-from etl_decorators.json import parse_jsonl
-
-
-@parse_jsonl
-def events() -> str:
-    return '{"id": 1}\n{"id": 2}\n'
-```
-
-**Requirements**
-
-- Same accepted inputs as `parse_json`.
-- Output: `Iterator[dict]` (or `Iterator[dict | list]` if you want to allow arrays-per-line; decide explicitly).
-- Lazy: do not read the whole file/string if a file-like is returned.
-- (Optional) `model: type[pydantic.BaseModel] | None` validation; can be deferred to later.
-
-**Tests**
-
-- Iterates all lines.
-- Skips/handles blank lines (define behavior).
-
-**Docs**
-
-- Add `doc/parse_jsonl.md`.
-
----
-
-### `etl_decorators.xml.parse_xml`
-
-**Goal**: XML parser + extraction helper (feeds, sitemaps, invoices).
-
-**Target API**
-
-```python
-from etl_decorators.xml import parse_xml
-
-
-@parse_xml(extract="//url/loc", extract_as_collection=True)
-def sitemap() -> str:
-    return "...xml..."
-```
-
-**Requirements**
-
-- Optional dependency: `lxml` (preferred) or stdlib `xml.etree` (decide; document).
-- Accept return values:
-  - `pathlib.Path | str` (path)
-  - file-like with `.read()`
-  - XML string
-- Extraction:
-  - XPath-like selector (if using lxml)
-  - `extract_as_collection` semantics similar to `parse_html`
-
-**Tests**
-
-- Parse from string.
-- Extraction returns expected element(s)/text.
-
-**Docs**
-
-- Add `doc/parse_xml.md`.
-
----
-
 ### `etl_decorators.normalize.normalize_records`
 
 **Goal**: Normalize records so downstream loads are predictable.
@@ -380,130 +265,15 @@ def rows() -> "Iterator[dict]":
 
 ---
 
-### `etl_decorators.streams.batch`
-
-**Goal**: Transform an iterator of items into an iterator of fixed-size batches.
-
-**Target API**
-
-```python
-from etl_decorators.streams import batch
-
-
-@batch(size=1000)
-def rows() -> "Iterator[dict]":
-    ...
-
-
-for chunk in rows():
-    assert isinstance(chunk, list)
-```
-
-**Requirements**
-
-- Decorated callable returns an iterable/iterator.
-- Output is a lazy iterator of `list[T]` batches.
-- Parameters:
-  - `size: int` (required, > 0)
-  - `drop_last: bool = False` (if True, drop incomplete final batch)
-- Must not load the entire stream in memory.
-
-**Tests**
-
-- Exact multiples.
-- With remainder.
-- `drop_last=True`.
-
-**Docs**
-
-- Add `doc/batch.md`.
-
----
-
-### `etl_decorators.streams.map`
-
-**Goal**: Lazily map items yielded from an iterator-returning function.
-
-**Target API**
-
-```python
-from etl_decorators.streams import map
-
-
-@map(lambda row: {**row, "x": int(row["x"])})
-def rows() -> "Iterator[dict]":
-    ...
-```
-
-**Requirements**
-
-- Decorated callable returns an iterable/iterator of `T`.
-- Mapper signature: `(item: T) -> U`.
-- Output is an iterator of `U`.
-- Prefer a minimal synchronous implementation first.
-  - If async iteration/concurrency is desired later, track as follow-up.
-
-**Tests**
-
-- Mapping is lazy (doesn’t pre-consume the iterator).
-- Exceptions from mapper bubble up unchanged.
-
-**Docs**
-
-- Add `doc/map.md`.
-
----
-
-### `etl_decorators.streams.dedupe` (no windowing)
-
-**Goal**: Remove duplicates from a single run’s stream.
-
-**Target API**
-
-```python
-from etl_decorators.streams import dedupe
-
-
-@dedupe(key=lambda row: row["id"])
-def rows():
-    ...
-```
-
-**Requirements**
-
-- Holds an in-memory `set` of seen keys for the lifetime of the iterator.
-- Parameters:
-  - `key: Callable[[T], Hashable]` (default identity)
-- No persistent store, no `window`.
-
-**Notes**
-
-- Document memory tradeoff: the `seen` set grows with unique keys.
-
-**Tests**
-
-- Dedupes items properly.
-- Works when items are unhashable but `key(item)` is hashable.
-
-**Docs**
-
-- Add `doc/dedupe.md`.
-
----
-
----
-
-## Documentation tasks (tracked, but NOT done in this task)
+## Documentation tasks
 
 ### Root README updates
 
 - Add new table-of-contents entries:
-  - `etl_decorators.http` → `doc/fetch_url.md`, `doc/paginate.md`
+  - `etl_decorators.http` → `doc/fetch.md`, `doc/paginate.md`
   - `etl_decorators.io` → `doc/read_file.md`, `doc/write_file.md`
-  - `etl_decorators.json` → `doc/parse_json.md`, `doc/parse_jsonl.md`
   - `etl_decorators.xml` → `doc/parse_xml.md`
   - `etl_decorators.normalize` → `doc/normalize_records.md`
-  - `etl_decorators.streams` → `doc/batch.md`, `doc/map.md`, `doc/dedupe.md`
 
 ---
 
@@ -524,5 +294,4 @@ Success = all tests green.
 
 ## Follow-ups / future ideas (non-goals for now)
 
-- Optional bounded-memory dedupe (`max_seen` / eviction) if users need it.
-- Concurrency support for `streams.map` if it becomes a bottleneck.
+None yet.

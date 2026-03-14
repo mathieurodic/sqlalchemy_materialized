@@ -1,86 +1,38 @@
 import asyncio
 import io
-import sys
-import types
+import builtins
 from datetime import datetime
 
 import pytest
 
+import pandas as pd
 
-def _install_fake_pandas(monkeypatch: pytest.MonkeyPatch):
-    """Install a tiny fake pandas module.
-
-    We only implement what `etl_decorators.csv.parse_csv` uses:
-    - pandas.read_csv(file_like, **kwargs)
-    - returns DataFrame-like with .columns + .iterrows()
-    - and a chunked variant when chunksize is provided.
-    """
-
-    pd = types.ModuleType("pandas")
-
-    class FakeDataFrame:
-        def __init__(self, columns, records):
-            self.columns = columns
-            self._records = records
-
-        def iterrows(self):
-            for i, rec in enumerate(self._records):
-                yield i, rec
-
-    class FakeTextFileReader:
-        def __init__(self, chunks):
-            self._chunks = chunks
-
-        def __iter__(self):
-            return iter(self._chunks)
-
-    def read_csv(buf, **kwargs):
-        text = buf.getvalue()
-        sep = kwargs.get("sep", ",")
-
-        # extremely small CSV parser: assumes header + no escaped seps
-        lines = [ln for ln in text.splitlines() if ln.strip()]
-        header = lines[0].split(sep)
-        rows = []
-        for ln in lines[1:]:
-            parts = ln.split(sep)
-            rec = {h: parts[idx] if idx < len(parts) else "" for idx, h in enumerate(header)}
-            rows.append(rec)
-
-        chunksize = kwargs.get("chunksize")
-        if chunksize:
-            chunks = []
-            for i in range(0, len(rows), int(chunksize)):
-                chunks.append(FakeDataFrame(header, rows[i : i + int(chunksize)]))
-            return FakeTextFileReader(chunks)
-
-        return FakeDataFrame(header, rows)
-
-    pd.read_csv = read_csv
-    monkeypatch.setitem(sys.modules, "pandas", pd)
+from etl_decorators.csv import _parse_scalar, _read_csv_payload, parse_csv
+from etl_decorators.csv import dialect as dialect_mod
+from etl_decorators.csv import scalar as scalar_mod
 
 
-def test_parse_csv_missing_pandas_raises():
-    from etl_decorators.csv import parse_csv
-
+def test_parse_csv_missing_pandas_raises(monkeypatch: pytest.MonkeyPatch):
     @parse_csv
     def get_csv():
         return "a,b\n1,2\n"
 
-    try:
-        import pandas  # noqa: F401
+    # Make the test deterministic by simulating a missing optional dependency.
+    # We still run the full test suite in an environment where pandas exists.
+    real_import = builtins.__import__
 
-        # pandas installed => decorator should work.
-        assert list(get_csv()) == [{"a": 1, "b": 2}]
-    except Exception:
-        # pandas missing => decorator should raise a clear error.
-        with pytest.raises(RuntimeError, match="pandas is required"):
-            list(get_csv())
+    def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):  # noqa: ANN001
+        if name == "pandas":
+            raise ImportError("pandas missing")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    with pytest.raises(RuntimeError, match="pandas is required"):
+        list(get_csv())
 
 
 def test__read_csv_payload_supports_string_path_and_filelike(tmp_path):
-    from etl_decorators.csv import _read_csv_payload
-
     p = tmp_path / "x.csv"
     p.write_text("a,b\n1,2\n", encoding="utf-8")
 
@@ -94,8 +46,6 @@ def test__read_csv_payload_supports_string_path_and_filelike(tmp_path):
 
 
 def test__read_csv_payload_path_object(tmp_path):
-    from etl_decorators.csv import _read_csv_payload
-
     p = tmp_path / "x.csv"
     p.write_text("a,b\n1,2\n", encoding="utf-8")
 
@@ -105,8 +55,6 @@ def test__read_csv_payload_path_object(tmp_path):
 
 
 def test__read_csv_payload_filelike_str_and_invalid_type():
-    from etl_decorators.csv import _read_csv_payload
-
     assert _read_csv_payload(io.StringIO("a,b\n1,2\n"))[0].startswith("a,b")
 
     class Bad:
@@ -118,15 +66,11 @@ def test__read_csv_payload_filelike_str_and_invalid_type():
 
 
 def test__read_csv_payload_invalid_payload_type_raises():
-    from etl_decorators.csv import _read_csv_payload
-
     with pytest.raises(TypeError, match="must return a file path"):
         _read_csv_payload(123)
 
 
 def test__parse_scalar_more_branches(monkeypatch: pytest.MonkeyPatch):
-    from etl_decorators.csv import _parse_scalar
-
     assert _parse_scalar(None, auto_datetime=True) is None
     assert _parse_scalar(float("nan"), auto_datetime=True) is None
     assert _parse_scalar(12, auto_datetime=True) == 12  # non-string passthrough
@@ -143,8 +87,6 @@ def test__parse_scalar_more_branches(monkeypatch: pytest.MonkeyPatch):
     assert _parse_scalar(w, auto_datetime=True) is w  # non-string passthrough
 
     # Force datetime parsing to fail to cover fallback-to-string branch.
-    from etl_decorators.csv import scalar as scalar_mod
-
     class _FakeDatetime:
         @staticmethod
         def fromisoformat(_s: str):
@@ -161,8 +103,6 @@ def test__parse_scalar_covers_regex_exception_branches(monkeypatch: pytest.Monke
     Those are not normally triggered, but we keep them for robustness.
     """
 
-    from etl_decorators.csv import scalar as scalar_mod
-
     def _raise(*_a, **_k):
         raise RuntimeError("re broken")
 
@@ -171,8 +111,6 @@ def test__parse_scalar_covers_regex_exception_branches(monkeypatch: pytest.Monke
 
 
 def test__sniff_csv_dialect_fallback_when_sniffer_fails(monkeypatch: pytest.MonkeyPatch):
-    from etl_decorators.csv import dialect as dialect_mod
-
     def _sniff_fail(self, sample, delimiters=None):
         raise RuntimeError("nope")
 
@@ -187,11 +125,7 @@ def test__sniff_csv_dialect_fallback_when_sniffer_fails(monkeypatch: pytest.Monk
     assert d.delimiter == ","
 
 
-def test_parse_csv_empty_input_returns_empty_iterator(monkeypatch: pytest.MonkeyPatch):
-    _install_fake_pandas(monkeypatch)
-
-    from etl_decorators.csv import parse_csv
-
+def test_parse_csv_empty_input_returns_empty_iterator():
     @parse_csv
     def get_csv():
         return "\n\n"
@@ -200,16 +134,10 @@ def test_parse_csv_empty_input_returns_empty_iterator(monkeypatch: pytest.Monkey
 
 
 def test_parse_csv_read_csv_error_is_wrapped_and_mentions_path(monkeypatch: pytest.MonkeyPatch, tmp_path):
-    _install_fake_pandas(monkeypatch)
-
-    import pandas as pd
-
     def _raise(_buf, **_kwargs):
         raise ValueError("bad csv")
 
     monkeypatch.setattr(pd, "read_csv", _raise)
-
-    from etl_decorators.csv import parse_csv
 
     p = tmp_path / "bad.csv"
     p.write_text("a,b\n1,2\n", encoding="utf-8")
@@ -222,11 +150,7 @@ def test_parse_csv_read_csv_error_is_wrapped_and_mentions_path(monkeypatch: pyte
         list(get_csv())
 
 
-def test_parse_csv_with_fake_pandas_delimiter_sniff_and_types(monkeypatch: pytest.MonkeyPatch):
-    _install_fake_pandas(monkeypatch)
-
-    from etl_decorators.csv import parse_csv
-
+def test_parse_csv_with_pandas_delimiter_sniff_and_types():
     @parse_csv
     def get_csv():
         # semicolon delimiter should be sniffed
@@ -244,11 +168,7 @@ def test_parse_csv_with_fake_pandas_delimiter_sniff_and_types(monkeypatch: pytes
     ]
 
 
-def test_parse_csv_force_delimiter(monkeypatch: pytest.MonkeyPatch):
-    _install_fake_pandas(monkeypatch)
-
-    from etl_decorators.csv import parse_csv
-
+def test_parse_csv_force_delimiter():
     @parse_csv(delimiter=":")
     def get_csv():
         return "a:b\n1:2\n"
@@ -256,11 +176,7 @@ def test_parse_csv_force_delimiter(monkeypatch: pytest.MonkeyPatch):
     assert list(get_csv()) == [{"a": 1, "b": 2}]
 
 
-def test_parse_csv_chunksize_yields_rows_incrementally(monkeypatch: pytest.MonkeyPatch):
-    _install_fake_pandas(monkeypatch)
-
-    from etl_decorators.csv import parse_csv
-
+def test_parse_csv_chunksize_yields_rows_incrementally():
     @parse_csv(chunksize=2)
     def get_csv():
         return "a,b\n1,2\n3,4\n5,6\n"
@@ -271,11 +187,41 @@ def test_parse_csv_chunksize_yields_rows_incrementally(monkeypatch: pytest.Monke
     assert next(it) == {"a": 5, "b": 6}
 
 
+def test_parse_csv_as_tuple_default_skips_header_row():
+    @parse_csv(as_dict=False)
+    def get_csv():
+        return "a,b\n1,2\n3,4\n"
+
+    assert list(get_csv()) == [(1, 2), (3, 4)]
+
+
+def test_parse_csv_as_tuple_skip_header_rows_zero_includes_first_row_as_data():
+    @parse_csv(as_dict=False, skip_header_rows=0)
+    def get_csv():
+        return "a,b\n1,2\n"
+
+    assert list(get_csv()) == [("a", "b"), (1, 2)]
+
+
+def test_parse_csv_skip_header_rows_preamble_and_custom_header_row():
+    @parse_csv(skip_header_rows=2)
+    def get_csv():
+        # row 0 is preamble, row 1 is header, data starts at row 2
+        return "THIS IS A REPORT\nx,y\n1,2\n"
+
+    assert list(get_csv()) == [{"x": 1, "y": 2}]
+
+
+def test_parse_csv_skip_header_rows_zero_raises_in_dict_mode():
+    @parse_csv(skip_header_rows=0)
+    def get_csv():
+        return "a,b\n1,2\n"
+
+    with pytest.raises(ValueError, match="skip_header_rows must be >= 1"):
+        list(get_csv())
+
+
 def test_parse_csv_async_wrapper(monkeypatch: pytest.MonkeyPatch):
-    _install_fake_pandas(monkeypatch)
-
-    from etl_decorators.csv import parse_csv
-
     @parse_csv
     async def get_csv():
         return "a,b\n1,2\n"

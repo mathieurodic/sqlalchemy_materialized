@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 def test_decorator_base_process_result_async_delegates_to_sync():
     from etl_decorators._base.decorators import DecoratorBase
 
@@ -68,3 +70,47 @@ def test_optional_fn_decorator_base_binds_optional():
 
     # fn provided path
     assert binder.bind_optional(f, deco)() == 2
+
+
+def test_decorator_base_sync_default_process_exception_reraises():
+    from etl_decorators._base.decorators import DecoratorBase
+
+    class D(DecoratorBase[[], int, None]):
+        def process_result(self, fn, result, args, kwargs, state):
+            return result
+
+    def f() -> int:
+        raise ValueError("boom")
+
+    wrapped = D().decorate(f)
+    with pytest.raises(ValueError, match="boom"):
+        wrapped()
+
+
+def test_decorator_base_async_default_process_exception_reraises():
+    from etl_decorators._base.decorators import DecoratorBase
+
+    class D(DecoratorBase[[], int, None]):
+        def process_result(self, fn, result, args, kwargs, state):
+            return result
+
+    async def f() -> int:
+        raise ValueError("boom")
+
+    wrapped = D().decorate(f)
+    with pytest.raises(ValueError, match="boom"):
+        asyncio.run(wrapped())
+
+
+def test_decorator_base_default_process_result_raises_not_implemented():
+    from etl_decorators._base.decorators import DecoratorBase
+
+    class D(DecoratorBase[[], int, None]):
+        pass
+
+    def f() -> int:
+        return 1
+
+    wrapped = D().decorate(f)
+    with pytest.raises(NotImplementedError):
+        wrapped()
