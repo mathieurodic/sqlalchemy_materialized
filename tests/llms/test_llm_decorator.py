@@ -6,6 +6,8 @@ import pytest
 from pydantic import BaseModel
 
 from etl_decorators.llms import LLM
+from etl_decorators.llms.llm import _require_type_annotation
+from etl_decorators.llms.validators import require_pydantic_model
 
 
 class Summary(BaseModel):
@@ -351,3 +353,108 @@ def test_llm_infers_wrapped_scalar_from_annotation(monkeypatch):
     assert isinstance(out, int)
     assert "response_format" in calls["completion"][0]
     assert prompt.__annotations__["return"] is int
+
+
+def test_llm_decorator_rejects_string_forward_ref_return_type():
+    llm = LLM(model="fake")
+
+    with pytest.raises(TypeError, match="string forward reference"):
+
+        @llm(return_type="ForwardRef")  # type: ignore[arg-type]
+        def prompt() -> str:
+            return "x"
+
+
+def test_require_type_annotation_rejects_none():
+    with pytest.raises(TypeError, match="return_type cannot be None"):
+        _require_type_annotation(None)
+
+
+def test_llm_decorator_accepts_typing_construct_return_type(monkeypatch):
+    calls = _install_fake_litellm(
+        monkeypatch,
+        completion_resp={"choices": [{"message": {"parsed": {"result": [1, 2]}}}]},
+    )
+
+    llm = LLM(model="fake")
+
+    @llm(return_type=list[int])
+    def prompt() -> str:
+        return "Return a list of ints"
+
+    out = prompt()
+    assert out == [1, 2]
+    assert isinstance(out, list)
+    assert "response_format" in calls["completion"][0]
+
+
+def test_llm_inference_falls_back_when_get_type_hints_raises(monkeypatch):
+    calls = _install_fake_litellm(
+        monkeypatch,
+        completion_resp={"choices": [{"message": {"content": "ok"}}]},
+    )
+
+    llm = LLM(model="fake")
+
+    @llm
+    def prompt() -> "NotDefined":  # noqa: F821
+        return "x"
+
+    out = prompt()
+    assert out == "ok"
+    assert "response_format" not in calls["completion"][0]
+
+
+def test_llm_inference_falls_back_when_require_pydantic_model_raises(monkeypatch):
+    calls = _install_fake_litellm(
+        monkeypatch,
+        completion_resp={"choices": [{"message": {"content": "ok"}}]},
+    )
+
+    llm = LLM(model="fake")
+
+    def boom(_: type[BaseModel]) -> type[BaseModel]:
+        raise TypeError("boom")
+
+    monkeypatch.setattr("etl_decorators.llms.llm.require_pydantic_model", boom)
+
+    @llm
+    def prompt() -> Summary:  # type: ignore[return-value]
+        return "x"
+
+    out = prompt()
+    assert out == "ok"
+    assert "response_format" not in calls["completion"][0]
+    assert prompt.__annotations__["return"] is str
+
+
+def test_llm_async_wrapped_scalar(monkeypatch):
+    calls = _install_fake_litellm(
+        monkeypatch,
+        completion_resp={"choices": [{"message": {"content": "ignored"}}]},
+        acompletion_resp={"choices": [{"message": {"parsed": {"result": 5}}}]},
+    )
+
+    llm = LLM(model="fake")
+
+    @llm(return_type=int)
+    async def prompt() -> str:
+        return "Return an int"
+
+    out = asyncio.run(prompt())
+    assert out == 5
+    assert isinstance(out, int)
+    assert "response_format" in calls["acompletion"][0]
+
+
+def test_require_pydantic_model_rejects_non_type():
+    with pytest.raises(TypeError, match="pydantic.BaseModel"):
+        require_pydantic_model("nope")
+
+
+def test_require_pydantic_model_rejects_non_basemodel_subclass():
+    class NotModel:
+        pass
+
+    with pytest.raises(TypeError, match="pydantic.BaseModel"):
+        require_pydantic_model(NotModel)
