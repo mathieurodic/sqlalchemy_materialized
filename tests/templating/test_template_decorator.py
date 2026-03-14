@@ -44,6 +44,13 @@ def test__read_template_payload_filelike_invalid_return_type_raises():
         _read_template_payload(Bad())
 
 
+def test__read_template_payload_unsupported_type_raises():
+    from etl_decorators.templating import _read_template_payload
+
+    with pytest.raises(TypeError, match="must return a file path"):
+        _read_template_payload(123)
+
+
 def test_template_renders_from_string():
     from etl_decorators.templating import template
 

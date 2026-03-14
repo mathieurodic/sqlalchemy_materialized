@@ -6,12 +6,7 @@ This TODO captures the next wave of decorators to build, based on the current do
 
 - **Extraction / IO**: `@fetch_url`, `@paginate`, `@read_file`, `@write_file`
 - **Parsing / normalization**: `@parse_json`, `@parse_jsonl`, `@parse_xml`, `@normalize_records`
-- **Resilience**: `@retry`, `@timeout`
 - **Streams**: `@batch`, `@map`, `@dedupe` (no windowing)
-
-It also captures the **documentation boundary change**:
-
-- `doc/materialized_property.md` should no longer contain the retry-policy documentation (retry should be documented as a standalone decorator).
 
 ---
 
@@ -57,11 +52,6 @@ Create new subpackages (some with optional dependencies, matching the project’
   - `normalize_records.py`
 
 And keep the originally planned ones:
-
-- `src/etl_decorators/resilience/`
-  - `__init__.py` exports `retry`, `timeout`
-  - `retry.py`
-  - `timeout.py`
 
 - `src/etl_decorators/streams/`
   - `__init__.py` exports `batch`, `map`, `dedupe`
@@ -113,14 +103,14 @@ def users_url(org_id: str) -> str:
 
 **Notes**
 
-- Interaction with `@retry`/`@timeout`: keep `fetch_url` simple; prefer composing `@retry` around it.
+- Keep `fetch_url` simple; prefer composing separate decorators around it.
 
 **Tests**
 
 - Use `respx` (if using httpx) or a small local test server; validate:
   - text response
   - json response
-  - timeout behavior (or delegated to `@timeout`)
+  - timeout behavior (or delegated to an external timeout wrapper)
 
 **Docs**
 
@@ -390,106 +380,6 @@ def rows() -> "Iterator[dict]":
 
 ---
 
-### `etl_decorators.resilience.retry`
-
-**Goal**: General-purpose retries with exponential backoff.
-
-**Target API**
-
-```python
-from etl_decorators.resilience import retry
-
-
-@retry(
-    retry_on=RuntimeError,
-    max_attempts=3,
-    interval=1.0,
-    factor=2.0,
-    jitter=0.1,
-)
-def fetch(...):
-    ...
-```
-
-**Requirements**
-
-- Works on sync functions and `async def`.
-- Retry decision:
-  - support `retry_on: type[BaseException] | tuple[type[BaseException], ...] | None`, and/or
-  - support a predicate `retry_if: Callable[[BaseException], bool] | None`.
-  - If both are provided, define precedence clearly (e.g. `retry_if` first).
-- Backoff:
-  - `sleep = interval * (factor ** (attempt - 1))`
-  - jitter optional (define whether additive or multiplicative).
-- Optional hook: `on_retry(exc, attempt, sleep)`.
-- Preserve metadata (`functools.wraps`) and keep stack traces readable.
-
-**Edge cases**
-
-- `max_attempts=1` means no retry.
-- If neither `retry_on` nor `retry_if` is provided, fail fast with a configuration error.
-- Ensure `factor >= 1` and `interval >= 0` (or define explicit constraints).
-
-**Tests**
-
-- Sync: fails twice then succeeds; asserts call count.
-- Async: fails twice then succeeds; asserts call count.
-- Predicate-based retry.
-- `sleep` is called with expected values (mock/stub sleep).
-
-**Docs**
-
-- Add `doc/retry.md`:
-  - basic usage
-  - async usage
-  - predicate usage
-  - backoff formula
-
----
-
-### `etl_decorators.resilience.timeout`
-
-**Goal**: Enforce a maximum execution time for ETL steps.
-
-**Target API**
-
-```python
-from etl_decorators.resilience import timeout
-
-
-@timeout(seconds=10)
-def step(...):
-    ...
-
-
-@timeout(seconds=10)
-async def step_async(...):
-    ...
-```
-
-**Requirements**
-
-- Async: `asyncio.wait_for`.
-- Sync: thread-based timeout (document limitations clearly; safe, cross-platform default).
-- Parameters:
-  - `seconds: float`
-  - optionally `timeout_error: type[Exception]` and/or `message: str | None`.
-
-**Edge cases**
-
-- `seconds <= 0` should raise a configuration error.
-
-**Tests**
-
-- Sync: function that sleeps longer than timeout raises.
-- Async: coroutine that sleeps longer than timeout raises.
-
-**Docs**
-
-- Add `doc/timeout.md`.
-
----
-
 ### `etl_decorators.streams.batch`
 
 **Goal**: Transform an iterator of items into an iterator of fixed-size batches.
@@ -605,11 +495,6 @@ def rows():
 
 ## Documentation tasks (tracked, but NOT done in this task)
 
-### Remove retry docs from `materialized_property`
-
-- Remove the entire “Retry policy” section from `doc/materialized_property.md`.
-- Optionally add a short pointer: “Use `etl_decorators.resilience.retry` at the call-site.”
-
 ### Root README updates
 
 - Add new table-of-contents entries:
@@ -618,7 +503,6 @@ def rows():
   - `etl_decorators.json` → `doc/parse_json.md`, `doc/parse_jsonl.md`
   - `etl_decorators.xml` → `doc/parse_xml.md`
   - `etl_decorators.normalize` → `doc/normalize_records.md`
-  - `etl_decorators.resilience` → `doc/retry.md`, `doc/timeout.md`
   - `etl_decorators.streams` → `doc/batch.md`, `doc/map.md`, `doc/dedupe.md`
 
 ---
@@ -642,4 +526,3 @@ Success = all tests green.
 
 - Optional bounded-memory dedupe (`max_seen` / eviction) if users need it.
 - Concurrency support for `streams.map` if it becomes a bottleneck.
-- If `materialized_property` currently has retry params in code, consider deprecating/removing them in favor of the standalone `retry` decorator.

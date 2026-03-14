@@ -176,28 +176,7 @@ By default, the compute function runs inside a SAVEPOINT (`session.begin_nested(
 
 In both cases, in-memory cached attributes are restored on failure so the property remains “not computed”.
 
-## Retry policy
+## Retry
 
-You can configure exponential-backoff retries for transient failures:
-
-```python
-@materialized_property(
-    retry_on=RuntimeError,
-    retry_max=3,
-    retry_interval=1.0,
-    retry_factor=2.0,
-)
-def value(self) -> int:
-    ...
-```
-
-Parameters:
-
-- `retry_on`: an exception class, a tuple of exception classes, or a predicate `(exc) -> bool`.
-- `retry_max` (default `3`): total number of attempts.
-- `retry_interval` (default `1.0`): initial wait in seconds.
-- `retry_factor` (default `2.0`): exponential backoff multiplier.
-
-Backoff formula:
-
-`sleep = retry_interval * (retry_factor ** (attempt - 1))`
+This decorator no longer implements retries directly.
+Compose retries at the call-site using :func:`etl_decorators.resilience.retry`.

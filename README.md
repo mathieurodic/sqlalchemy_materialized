@@ -65,7 +65,15 @@ pip install etl-decorators[templating]
 
 - Main entrypoint: [`etl_decorators.logging.log`](src/etl_decorators/logging/__init__.py)
 - User documentation: [`doc/log.md`](doc/log.md)
+- Developer notes / code layout: [`src/etl_decorators/logging/README.md`](src/etl_decorators/logging/README.md)
 - Tests: [`tests/logging/`](tests/logging/)
+
+### `etl_decorators.resilience`
+
+- Main entrypoints: `etl_decorators.resilience.retry`, `etl_decorators.resilience.timeout` (`src/etl_decorators/resilience/__init__.py`)
+- User documentation: [`doc/retry.md`](doc/retry.md), [`doc/timeout.md`](doc/timeout.md)
+- Developer notes / code layout: [`src/etl_decorators/resilience/README.md`](src/etl_decorators/resilience/README.md)
+- Tests: [`tests/resilience/`](tests/resilience/)
 
 ## Optional dependencies & lazy imports
 

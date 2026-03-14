@@ -3,7 +3,6 @@ from __future__ import annotations
 from contextlib import nullcontext
 from datetime import datetime, timezone
 import logging
-import time
 from typing import Any, Callable, get_args, get_origin
 
 import sqlalchemy as sa
@@ -95,10 +94,6 @@ class _MaterializedPropertyDescriptor:
         compute_fn = self.fn
         in_transaction = self.config.in_transaction
         validate = self.config.validate
-        retry_on = self.config.retry_on
-        retry_max = self.config.retry_max
-        retry_factor = self.config.retry_factor
-        retry_interval = self.config.retry_interval
         is_fk = self._is_fk
         is_list = self._is_list
         is_optional = self._is_optional
@@ -223,14 +218,6 @@ class _MaterializedPropertyDescriptor:
             if not isinstance(value, rt):
                 _raise_type(f"expected {rt!r}, received: {type(value)!r}")
 
-        def should_retry(exc: Exception) -> bool:
-            if isinstance(retry_on, type) and issubclass(retry_on, Exception):
-                return isinstance(exc, retry_on)
-            if isinstance(retry_on, tuple):
-                return isinstance(exc, retry_on)
-            # Note: exception classes are callable, so we check for those above.
-            return bool(retry_on(exc))
-
         def normalize_to_id(value):
             if not is_fk:
                 return value
@@ -312,55 +299,46 @@ class _MaterializedPropertyDescriptor:
                     old_cache = getattr(self, cache_attr)
                 old_computed_at = getattr(self, computed_at_attr)
 
-                for attempt in range(1, retry_max + 1):
-                    try:
-                        if in_transaction:
-                            cm = session.begin_nested()
+                try:
+                    if in_transaction:
+                        cm = session.begin_nested()
+                    else:
+                        cm = nullcontext()
+
+                    with cm:
+                        computed = compute_fn(self)
+                        validate_value(computed)
+
+                        if is_list_fk:
+                            targets = normalize_list_fk_to_instances(self, computed)
+                            assoc_rows = [
+                                list_assoc_cls(pos=i, target=t)
+                                for i, t in enumerate(targets)
+                            ]
+                            setattr(self, list_assoc_attr, assoc_rows)
+                            setattr(self, computed_at_attr, datetime.now(timezone.utc))
+                            session.flush()
                         else:
-                            cm = nullcontext()
+                            normalized = normalize_to_id(computed)
+                            setattr(self, cache_attr, normalized)
+                            setattr(self, computed_at_attr, datetime.now(timezone.utc))
+                            session.flush()
+                except Exception as e:
+                    logger.error(
+                        "materialized_property compute failed (%s): %s",
+                        e.__class__.__name__,
+                        str(e),
+                    )
+                    logger.debug(
+                        "materialized_property compute traceback",
+                        exc_info=True,
+                    )
 
-                        with cm:
-                            computed = compute_fn(self)
-                            validate_value(computed)
-
-                            if is_list_fk:
-                                targets = normalize_list_fk_to_instances(self, computed)
-                                assoc_rows = [
-                                    list_assoc_cls(pos=i, target=t)
-                                    for i, t in enumerate(targets)
-                                ]
-                                setattr(self, list_assoc_attr, assoc_rows)
-                                setattr(self, computed_at_attr, datetime.now(timezone.utc))
-                                session.flush()
-                            else:
-                                normalized = normalize_to_id(computed)
-                                setattr(self, cache_attr, normalized)
-                                setattr(self, computed_at_attr, datetime.now(timezone.utc))
-                                session.flush()
-                        break
-                    except Exception as e:
-                        logger.error(
-                            "materialized_property compute failed (%s): %s",
-                            e.__class__.__name__,
-                            str(e),
-                        )
-                        logger.debug(
-                            "materialized_property compute traceback",
-                            exc_info=True,
-                        )
-
-                        # Rollback DB side effects is handled by begin_nested()'s context manager.
-                        # We also restore the in-memory attributes so the property remains "not computed".
-                        setattr(self, cache_attr, old_cache)
-                        setattr(self, computed_at_attr, old_computed_at)
-
-                        is_last_attempt = attempt >= retry_max
-                        if is_last_attempt or not should_retry(e):
-                            raise
-
-                        delay = retry_interval * (retry_factor ** (attempt - 1))
-                        if delay > 0:
-                            time.sleep(delay)
+                    # Rollback DB side effects is handled by begin_nested()'s context manager.
+                    # We also restore the in-memory attributes so the property remains "not computed".
+                    setattr(self, cache_attr, old_cache)
+                    setattr(self, computed_at_attr, old_computed_at)
+                    raise
 
             # Fast path for list[MappedClass]
             if is_list_fk:
