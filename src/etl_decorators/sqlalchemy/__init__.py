@@ -12,7 +12,12 @@ Only the main decorator is exported at this level:
 """
 
 from .materialized import materialized_property
+from .orm import JSON, field
+from .orm.as_model import as_model
 
 __all__ = [
+    "JSON",
+    "as_model",
+    "field",
     "materialized_property",
 ]

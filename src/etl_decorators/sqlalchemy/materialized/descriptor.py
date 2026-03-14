@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from datetime import datetime, timezone
 import logging
-from typing import Any, Callable, get_args, get_origin
+from typing import Any, Callable, get_args, get_origin, get_type_hints
 
 import sqlalchemy as sa
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -34,18 +34,38 @@ class _MaterializedPropertyDescriptor:
         self._list_assoc_attr: str | None = None
         self._list_assoc_cls: type | None = None
 
+        # We need the return type, but on Python modules using
+        # `from __future__ import annotations`, the return annotation is stored
+        # as a string (e.g. "int") until resolved.
+        #
+        # We therefore compute the return type lazily in __set_name__, once we
+        # know the owning class and can pass it as localns.
+        self.return_type: Any | None = None
+        self._is_optional: bool | None = None
+        self._is_list: bool | None = None
+        self._list_item_type: Any | None = None
+        self._is_fk: bool | None = None
+
+        # Preserve historical behavior: missing return annotations and invalid
+        # unions should fail as soon as the decorator is applied.
         return_ann = fn.__annotations__.get("return")
         if return_ann is None:
             raise TypeError(
                 f"materialized_property {fn.__name__} must have a return annotation"
             )
 
+        # If the annotation is already a concrete typing object (i.e. not a
+        # string forward-ref), we can validate it eagerly.
+        if not isinstance(return_ann, str):
+            self._set_return_type_from_annotation(return_ann)
+
+    def _set_return_type_from_annotation(self, return_ann: Any) -> None:
         try:
             # Normalize Optional[T] / T | None so FK detection and isinstance() work.
             unwrapped, is_optional = unwrap_optional(return_ann)
         except TypeError as e:
             raise TypeError(
-                f"Unsupported return annotation for materialized_property {fn.__name__}: {return_ann!r}"
+                f"Unsupported return annotation for materialized_property {self.fn.__name__}: {return_ann!r}"
             ) from e
 
         self.return_type = unwrapped
@@ -59,7 +79,27 @@ class _MaterializedPropertyDescriptor:
             self._list_item_type = None
             self._is_fk = _is_mapped_class(self.return_type)
 
+    def _resolve_return_type(self, owner: type) -> None:
+        # Attempt to resolve forward refs / string annotations.
+        try:
+            hints = get_type_hints(self.fn, globalns=getattr(self.fn, "__globals__", None), localns=vars(owner))
+            return_ann = hints.get("return")
+        except Exception:
+            return_ann = self.fn.__annotations__.get("return")
+
+        if return_ann is None:
+            raise TypeError(
+                f"materialized_property {self.fn.__name__} must have a return annotation"
+            )
+
+        self._set_return_type_from_annotation(return_ann)
+
     def __set_name__(self, owner, name):
+        # Resolve return type now that we know the owning class (needed for
+        # string annotations when `from __future__ import annotations` is used).
+        if self.return_type is None:
+            self._resolve_return_type(owner)
+
         self._prop_name = name
 
         # 1) list[MappedClass] is stored via association table + relationship
@@ -68,7 +108,9 @@ class _MaterializedPropertyDescriptor:
             self._inject_list_fk_storage(owner)
         else:
             # Inject the backing DB column into the class
-            col = make_sa_column(name, self.return_type)
+            # materialized_property backing columns must start nullable because
+            # they are NULL until computed.
+            col = make_sa_column(name, self.return_type, nullable=True)
             setattr(owner, self.cache_attr, col)
 
         # 2) computed_at column (timezone-aware)

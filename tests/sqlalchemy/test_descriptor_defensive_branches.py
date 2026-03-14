@@ -387,7 +387,7 @@ def test_descriptor_pk_python_type_fallback_branches(monkeypatch):
     # We want the descriptor to reach `_pk_python_type`, but we *don't* want
     # `make_sa_column` to raise first (it rejects composite PK, which is a
     # separate concern). So we patch make_sa_column for this test.
-    def _fake_make_sa_column(_name: str, _t):  # noqa: ANN001
+    def _fake_make_sa_column(_name: str, _t, **_kwargs):  # noqa: ANN001
         return sa.orm.mapped_column(_name, sa.Integer, nullable=True)
 
     monkeypatch.setattr(descriptor, "make_sa_column", _fake_make_sa_column)
@@ -507,7 +507,7 @@ def test_descriptor_validate_value_scalar_any_is_not_type_checked(monkeypatch):
 
     # make_sa_column doesn't support typing.Any, so we patch the descriptor to
     # use a JSON backing column for this test.
-    def _fake_make_sa_column(name: str, _t):  # noqa: ANN001
+    def _fake_make_sa_column(name: str, _t, **_kwargs):  # noqa: ANN001
         return sa.orm.mapped_column(name, sa.JSON, nullable=True)
 
     monkeypatch.setattr(descriptor, "make_sa_column", _fake_make_sa_column)

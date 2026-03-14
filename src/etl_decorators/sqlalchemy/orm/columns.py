@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import date, datetime, time
 from typing import Any, get_args, get_origin
 
 import sqlalchemy as sa
@@ -16,12 +16,33 @@ TYPE_MAP = {
     float: sa.Float,
     str: sa.String,
     bool: sa.Boolean,
+    date: sa.Date,
     datetime: lambda: sa.DateTime(timezone=True),
     time: sa.Time,
 }
 
 
-def make_sa_column(name: str, t: Any) -> MappedColumn:
+def _is_sa_type(t: Any) -> bool:
+    """Return True if t looks like a SQLAlchemy type or type instance."""
+
+    # sa.String / sa.JSON are classes (subclasses of TypeEngine).
+    if isinstance(t, type) and issubclass(t, sa.types.TypeEngine):
+        return True
+
+    # PydanticJSON(Payload) etc are instances.
+    if isinstance(t, sa.types.TypeEngine):
+        return True
+
+    return False
+
+
+def make_sa_column(
+    name: str,
+    t: Any,
+    *,
+    nullable: bool | None = None,
+    **mapped_column_kwargs: Any,
+) -> MappedColumn:
     """Create a SQLAlchemy (ORM) column from a Python type.
 
     Parameters
@@ -40,6 +61,17 @@ def make_sa_column(name: str, t: Any) -> MappedColumn:
     # NOTE: unwrap_optional is strict and raises on other unions.
     inner, _is_optional = unwrap_optional(t)
     t = inner
+
+    if nullable is None:
+        nullable = _is_optional
+
+    # - Allow callers to pass SQLAlchemy types directly.
+    #   Examples:
+    #   - details: sa.JSON
+    #   - payload: PydanticJSON(Payload)
+    if _is_sa_type(t):
+        sa_type = t() if isinstance(t, type) else t
+        return mapped_column(name, sa_type, nullable=nullable, **mapped_column_kwargs)
 
     # 0) list[...] case: store as JSON.
     # - list[BaseModelSubclass] => validated list via PydanticJSONList
@@ -60,9 +92,14 @@ def make_sa_column(name: str, t: Any) -> MappedColumn:
             and isinstance(item_t, type)
             and issubclass(item_t, BaseModel)
         ):
-            return mapped_column(name, PydanticJSONList(item_t), nullable=True)
+            return mapped_column(
+                name,
+                PydanticJSONList(item_t),
+                nullable=nullable,
+                **mapped_column_kwargs,
+            )
 
-        return mapped_column(name, sa.JSON, nullable=True)
+        return mapped_column(name, sa.JSON, nullable=nullable, **mapped_column_kwargs)
 
     # 1) "SQLAlchemy Declarative model" case: create a FK to its PK.
     try:
@@ -87,7 +124,8 @@ def make_sa_column(name: str, t: Any) -> MappedColumn:
             name,
             pk_type,
             sa.ForeignKey(f"{target_table}.{target_pk}"),
-            nullable=True,
+            nullable=nullable,
+            **mapped_column_kwargs,
         )
 
     # 2) "Pydantic BaseModel" case: JSON storage
@@ -97,12 +135,22 @@ def make_sa_column(name: str, t: Any) -> MappedColumn:
         BaseModel = None  # type: ignore[assignment]
 
     if BaseModel is not None and isinstance(t, type) and issubclass(t, BaseModel):
-        return mapped_column(name, PydanticJSON(t), nullable=True)
+        return mapped_column(
+            name,
+            PydanticJSON(t),
+            nullable=nullable,
+            **mapped_column_kwargs,
+        )
 
     # 3) "Standard Python type" case: mapping via TYPE_MAP.
     if t in TYPE_MAP:
         maker = TYPE_MAP[t]
-        return mapped_column(name, maker(), nullable=True)
+        return mapped_column(
+            name,
+            maker(),
+            nullable=nullable,
+            **mapped_column_kwargs,
+        )
 
     raise TypeError(
         "make_sa_column: unsupported python type annotation. "

@@ -1,4 +1,4 @@
-# etl-decorators
+# ETL-decorators
 
 A collection of small, focused decorators used in ETL / data applications.
 
@@ -66,7 +66,9 @@ Each subpackage’s README documents its own dependency behavior.
 #### `etl_decorators.sqlalchemy`
 
 - Install: `pip install etl-decorators[sqlalchemy]`
-- User documentation: [`etl_decorators.sqlalchemy.materialized_property`](doc/materialized_property.md)
+- User documentation:
+  - [`etl_decorators.sqlalchemy.materialized_property`](doc/materialized_property.md)
+  - [`etl_decorators.sqlalchemy.as_model`](doc/as_model.md)
 - Developer notes / code layout: [`src/etl_decorators/sqlalchemy/README.md`](src/etl_decorators/sqlalchemy/README.md)
 - Tests: [`tests/sqlalchemy/`](tests/sqlalchemy/)
 
