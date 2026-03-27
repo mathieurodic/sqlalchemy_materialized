@@ -20,8 +20,8 @@ def setup_dependency_invalidation(descriptor, owner: type) -> None:
 
     cache_attr = descriptor.cache_attr
     computed_at_attr = descriptor.computed_at_attr
-    list_assoc_attr = descriptor._list_assoc_attr
-    is_list_fk = bool(descriptor._is_list and descriptor._is_fk and list_assoc_attr)
+    prop_name = descriptor._prop_name
+    is_list_fk = bool(descriptor._is_list and descriptor._is_fk)
 
     def invalidate(target):
         # If not computed yet, nothing to do.
@@ -30,7 +30,10 @@ def setup_dependency_invalidation(descriptor, owner: type) -> None:
 
         # Clear cached storage.
         if is_list_fk:
-            setattr(target, list_assoc_attr, [])
+            # list[MappedClass] is stored as an actual relationship collection.
+            # NOTE: no deleter exists anymore for relationship-based properties.
+            if prop_name is not None:
+                setattr(target, prop_name, [])
         else:
             setattr(target, cache_attr, None)
 

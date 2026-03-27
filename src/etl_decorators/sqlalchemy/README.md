@@ -40,6 +40,7 @@ The implementation is split into small modules:
 - [`orm/columns.py`](orm/columns.py): `make_sa_column` (Python annotation → SQLAlchemy column)
 - [`orm/as_model.py`](orm/as_model.py): `as_model` (plain annotated class → SQLAlchemy declarative model)
 - [`orm/field.py`](orm/field.py): `field` (defaults + column kwargs helper for `as_model`)
+- [`orm/soft_delete.py`](orm/soft_delete.py): `enable_soft_delete` (soft delete hooks + `with_deleted(...)`)
 - [`type_decorators/pydantic_json.py`](type_decorators/pydantic_json.py): `PydanticJSON`, `PydanticJSONList`
 
 ## Tests

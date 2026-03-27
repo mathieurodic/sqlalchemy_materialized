@@ -17,6 +17,7 @@ def test_materialized_property_raises_on_non_optional_union_return_annotation():
 
 def test_materialized_property_list_fk_raises_when_compute_returns_non_list(monkeypatch):
     import etl_decorators.sqlalchemy.materialized.descriptor as descriptor
+    import etl_decorators.sqlalchemy.materialized.o2m_collection as o2m_collection
     import etl_decorators.sqlalchemy.materialized.decorator as dec
 
     class FakeSession:
@@ -36,8 +37,8 @@ def test_materialized_property_list_fk_raises_when_compute_returns_non_list(monk
         def get(self, cls, ident):  # pragma: no cover (not reached)
             raise AssertionError("should not be called")
 
-    # Patch the helper used by _require_session
-    monkeypatch.setattr(descriptor, "_require_session", lambda obj: FakeSession())
+    # Patch the helper used by _require_session (relationship collection path)
+    monkeypatch.setattr(o2m_collection, "_require_session", lambda obj: FakeSession())
 
     class Base(DeclarativeBase):
         pass
@@ -57,12 +58,11 @@ def test_materialized_property_list_fk_raises_when_compute_returns_non_list(monk
         id: Mapped[int] = mapped_column(primary_key=True)
         authors = dec.materialized_property(compute)
 
-    # Here, list[MappedClass] is stored in an association relationship,
-    # therefore we can't easily force an invalid backing value. Instead we
-    # assert that an invalid compute output raises.
+    # list[MappedClass] is stored in a relationship collection; invalid compute
+    # output should raise on first meaningful access.
     m = Model()
     try:
-        _ = m.authors
+        _ = list(m.authors)
         raise AssertionError("Expected TypeError")
     except TypeError as e:
         assert "expected a list" in str(e)
@@ -70,6 +70,7 @@ def test_materialized_property_list_fk_raises_when_compute_returns_non_list(monk
 
 def test_materialized_property_list_fk_rejects_none_items(monkeypatch):
     import etl_decorators.sqlalchemy.materialized.descriptor as descriptor
+    import etl_decorators.sqlalchemy.materialized.o2m_collection as o2m_collection
     import etl_decorators.sqlalchemy.materialized.decorator as dec
 
     class _BeginNested:
@@ -86,7 +87,7 @@ def test_materialized_property_list_fk_rejects_none_items(monkeypatch):
         def flush(self):
             pass
 
-    monkeypatch.setattr(descriptor, "_require_session", lambda obj: FakeSession())
+    monkeypatch.setattr(o2m_collection, "_require_session", lambda obj: FakeSession())
 
     class Base(DeclarativeBase):
         pass
@@ -111,7 +112,7 @@ def test_materialized_property_list_fk_rejects_none_items(monkeypatch):
     # Not in a session, but we should fail earlier due to None item
     # while normalizing the compute result.
     try:
-        _ = m.authors
+        _ = list(m.authors)
         raise AssertionError("Expected TypeError")
     except TypeError as e:
         assert "does not accept None items" in str(e)

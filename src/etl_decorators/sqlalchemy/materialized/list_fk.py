@@ -3,93 +3,131 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
-from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import relationship
+
+from .o2m_collection import _MaterializedO2MList
+
 
 if TYPE_CHECKING:  # pragma: no cover
     from .descriptor import _MaterializedPropertyDescriptor
 
 
-def inject_list_fk_storage(descriptor: "_MaterializedPropertyDescriptor", owner: type) -> None:
+def inject_list_o2m_fk_storage(
+    descriptor: "_MaterializedPropertyDescriptor",
+    owner: type,
+) -> None:
+    """Inject one-to-many storage for list[MappedClass].
+
+    At class construction time (`__set_name__`), we inject the required mapped
+    attributes (FK column + relationships) without forcing mapper
+    configuration.
+
+    Note: we set up `back_populates` directly on both relationship() calls.
+    SQLAlchemy will resolve them during mapper configuration.
+    """
+
     assert descriptor._prop_name is not None
-    cache_attr = descriptor.cache_attr
-    target_cls = descriptor._list_item_type
 
-    # The association table uses column-level ForeignKey, which is enough
-    # for SQLAlchemy to infer the correct type of the FK column even though
-    # __set_name__ runs before mappers are fully configured.
+    prop_name = descriptor._prop_name
+    child_cls = descriptor._list_item_type
+    if child_cls is None:
+        raise RuntimeError(
+            "materialized_property: internal error (missing list item type)"
+        )
+
+    # Ensure child is mapped and has a single-column PK.
+    try:
+        child_mapper = sa.inspect(child_cls)
+    except Exception as e:
+        raise TypeError(
+            "materialized_property: list[...] return annotation must be a mapped class; "
+            f"got: {child_cls!r}"
+        ) from e
+
+    pk_cols = list(getattr(child_mapper, "primary_key", []) or [])
+    if len(pk_cols) != 1:
+        raise ValueError(
+            "materialized_property only supports single-column primary keys "
+            f"(composite PK detected for {child_cls!r})."
+        )
+
+    owner_name = owner.__name__.lower()
+    fk_attr = f"{owner_name}_id"
+    child_owner_attr = owner_name
+
+    # Determine FK target based on owner's PK column name.
     owner_table = getattr(owner, "__tablename__", owner.__name__.lower())
-    target_table = getattr(target_cls, "__tablename__", target_cls.__name__.lower())
-    assoc_table_name = (
-        f"__materialized__{owner_table}__{descriptor._prop_name}__{target_table}"
-    )
-
-    # Find the owner PK database column name. At __set_name__ time the
-    # InstrumentedAttribute isn't configured yet, but mapped_column has
-    # already created a Column with name/key.
     owner_pk_col_name: str | None = None
     for k, v in owner.__dict__.items():
         col = getattr(v, "column", None)
         if col is not None and getattr(col, "primary_key", False):
-            # At __set_name__ time, SQLAlchemy may not have assigned a final
-            # name to the Column yet (col.name can be None). In that case,
-            # the default DB column name will match the attribute name.
             owner_pk_col_name = col.name or getattr(col, "key", None) or k
             break
     if owner_pk_col_name is None:
         raise RuntimeError(
-            "materialized_property: cannot create association table for list[MappedClass]; "
+            "materialized_property: cannot inject one-to-many FK storage for list[MappedClass]; "
             f"no primary key detected on {owner!r}"
         )
 
-    # Target PK column name & type: use SQLAlchemy inspection (works at
-    # class creation time).
-    mapper = sa_inspect(target_cls)
-    pk_cols = list(mapper.primary_key)
-    if len(pk_cols) != 1:
-        raise ValueError(
-            "materialized_property only supports single-column primary keys "
-            f"(composite PK detected for {target_cls!r})."
+    fk_target = f"{owner_table}.{owner_pk_col_name}"
+
+    # 1) Inject child FK column.
+    if not hasattr(child_cls, fk_attr):
+        setattr(
+            child_cls,
+            fk_attr,
+            sa.orm.mapped_column(sa.ForeignKey(fk_target), nullable=True),
         )
-    target_pk_col = pk_cols[0]
-    target_pk_col_name = target_pk_col.name
 
-    assoc_table = sa.Table(
-        assoc_table_name,
-        owner.metadata,
-        sa.Column(
-            "owner_id",
-            sa.ForeignKey(f"{owner_table}.{owner_pk_col_name}"),
-            primary_key=True,
-        ),
-        sa.Column("pos", sa.Integer, primary_key=True, nullable=False),
-        sa.Column(
-            "target_id",
-            sa.ForeignKey(f"{target_table}.{target_pk_col_name}"),
-            nullable=False,
-        ),
+    # 2) Inject relationships.
+    #
+    # We set back_populates on both sides up-front. Even though we're adding
+    # these attributes during class construction, SQLAlchemy resolves
+    # back_populates during mapper configuration (later), so both sides will be
+    # present by then.
+    setattr(
+        child_cls,
+        child_owner_attr,
+        relationship(owner, back_populates=prop_name),
     )
 
-    assoc_cls_name = f"__MaterializedAssoc__{owner.__name__}__{descriptor._prop_name}"
-    assoc_cls = type(assoc_cls_name, (), {})
-    # Map the association class
-    owner.registry.map_imperatively(
-        assoc_cls,
-        assoc_table,
-        properties={
-            "target": relationship(target_cls),
-        },
-    )
-    descriptor._list_assoc_cls = assoc_cls
-
-    # Relationship holding association objects.
-    descriptor._list_assoc_attr = cache_attr
+    # Always override the owner attribute: at __set_name__ time it's still the
+    # descriptor instance, but we want the public attribute to be a
+    # relationship.
     setattr(
         owner,
-        cache_attr,
+        prop_name,
         relationship(
-            assoc_cls,
+            child_cls,
+            back_populates=child_owner_attr,
             cascade="all, delete-orphan",
-            order_by=assoc_table.c.pos,
+            collection_class=_MaterializedO2MList,
+            lazy="noload",
         ),
     )
+
+    # Configure collection materializer behavior.
+    # These attributes are class-level defaults which will be used by each
+    # instance's collection.
+    rel = getattr(owner, prop_name)
+    try:
+        # Use staticmethod to avoid Python binding the function to the
+        # collection instance when accessed via `self._compute_fn`.
+        rel.collection_class._compute_fn = staticmethod(descriptor.fn)  # type: ignore[attr-defined]
+        rel.collection_class._computed_at_attr = descriptor.computed_at_attr  # type: ignore[attr-defined]
+        rel.collection_class._prop_name = prop_name  # type: ignore[attr-defined]
+        rel.collection_class._child_cls = child_cls  # type: ignore[attr-defined]
+        rel.collection_class._child_owner_attr = child_owner_attr  # type: ignore[attr-defined]
+        rel.collection_class._in_transaction = descriptor.config.in_transaction  # type: ignore[attr-defined]
+        rel.collection_class._validate_value = staticmethod(descriptor._validate_list_fk_value)  # type: ignore[attr-defined]
+        rel.collection_class._normalize_list_to_instances = staticmethod(descriptor._normalize_list_fk_to_instances)  # type: ignore[attr-defined]
+        rel.collection_class._materializing_guard_attr = f"_{descriptor.fn.__name__}__materializing"  # type: ignore[attr-defined]
+    except Exception:
+        # Defensive: don't break mapping if we can't set this for some reason.
+        pass
+
+    # No mapper events required.
+
+
+# Backwards compat import path within the package.
+inject_list_fk_storage = inject_list_o2m_fk_storage

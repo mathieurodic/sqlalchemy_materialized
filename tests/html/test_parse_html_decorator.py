@@ -191,6 +191,35 @@ def test_parse_html_extract_collection_missing_returns_empty_list():
     assert get_html() == []
 
 
+def test_parse_html_extract_tuple_first_match_per_selector():
+    from etl_decorators.html import parse_html
+
+    @parse_html(extract=("h1", ".item", ".missing"))
+    def get_html():
+        return "<div><h1>T</h1><span class='item'>a</span><span class='item'>b</span></div>"
+
+    res = get_html()
+    assert isinstance(res, list)
+    assert res[0] is not None and res[0].name == "h1"
+    assert res[1] is not None and res[1].name == "span"
+    assert res[2] is None
+
+
+def test_parse_html_extract_tuple_collection_per_selector():
+    from etl_decorators.html import parse_html
+
+    @parse_html(extract=(".item", "h1", ".missing"), extract_as_collection=True)
+    def get_html():
+        return "<div><h1>T</h1><span class='item'>a</span><span class='item'>b</span></div>"
+
+    res = get_html()
+    assert isinstance(res, list)
+    assert len(res) == 3
+    assert [t.get_text(strip=True) for t in res[0]] == ["a", "b"]
+    assert [t.get_text(strip=True) for t in res[1]] == ["T"]
+    assert res[2] == []
+
+
 def test_parse_html_convert_to_markdown_full_doc():
     from etl_decorators.html import parse_html
 
@@ -229,6 +258,36 @@ def test_parse_html_convert_to_markdown_fragment_collection():
     assert isinstance(md_list, list)
     assert "A" in md_list[0]
     assert "B" in md_list[1]
+
+
+def test_parse_html_convert_to_markdown_tuple_first_match_per_selector():
+    from etl_decorators.html import parse_html
+
+    @parse_html(extract=("h1", "p", ".missing"), convert_to_markdown=True)
+    def get_html():
+        return "<div><h1>Title</h1><p>Hello <b>world</b></p></div>"
+
+    md_list = get_html()
+    assert isinstance(md_list, list)
+    assert "Title" in (md_list[0] or "")
+    assert "Hello" in (md_list[1] or "")
+    assert md_list[2] is None
+
+
+def test_parse_html_convert_to_markdown_tuple_collection_per_selector():
+    from etl_decorators.html import parse_html
+
+    @parse_html(extract=("p", "h1", ".missing"), extract_as_collection=True, convert_to_markdown=True)
+    def get_html():
+        return "<div><h1>Title</h1><p>A</p><p>B</p></div>"
+
+    md_lists = get_html()
+    assert isinstance(md_lists, list)
+    assert md_lists[0][0].strip() != ""
+    assert "A" in md_lists[0][0]
+    assert "B" in md_lists[0][1]
+    assert "Title" in md_lists[1][0]
+    assert md_lists[2] == []
 
 
 def test_parse_html_async_wrapper():

@@ -224,14 +224,18 @@ def test_depends_on_invalidation_clears_association_cache_for_list_fk():
         session.add(p)
         session.flush()
 
-        assert p.authors == []
+        assert list(p.authors) == []
         assert calls["compute"] == 1
         assert getattr(p, "_compute_authors__computed_at") is not None
 
-        # Changing dependency should invalidate and clear association relationship
+        # Changing dependency should invalidate and reset computed_at.
         p.base = 2
         assert getattr(p, "_compute_authors__computed_at") is None
-        assert getattr(p, "_compute_authors") == []
+
+        # Next meaningful access recomputes.
+        assert list(p.authors) == []
+        assert calls["compute"] == 2
+        assert getattr(p, "_compute_authors__computed_at") is not None
 
 
 def test_depends_on_relationship_remove_and_bulk_replace_invalidates():
@@ -338,7 +342,7 @@ def test_hybrid_expression_raises_for_list_return_types():
         _ = Model.value.expression
 
 
-def test_list_fk_setter_accepts_instances_and_ids_and_deleter_clears():
+def test_list_fk_relationship_materializer_accepts_instances_and_ids():
     from etl_decorators.sqlalchemy import materialized_property
 
     class Base(DeclarativeBase):
@@ -354,9 +358,10 @@ def test_list_fk_setter_accepts_instances_and_ids_and_deleter_clears():
         __allow_unmapped__ = True
 
         id: Mapped[int] = mapped_column(primary_key=True)
+        author_ids: Mapped[list[int]] = mapped_column(sa.JSON, nullable=True)
 
         def compute_authors(self) -> list[Author]:
-            return []
+            return self.author_ids  # type: ignore[return-value]
 
         authors = materialized_property(compute_authors)
 
@@ -368,28 +373,23 @@ def test_list_fk_setter_accepts_instances_and_ids_and_deleter_clears():
         session.add(a1)
         session.flush()
 
-        p = Post()
+        p = Post(author_ids=[a1.id])
         session.add(p)
         session.flush()
 
-        # setter with instance
-        p.authors = [a1]
-        assert [a.id for a in p.authors] == [a1.id]
+        # First meaningful access triggers compute and links child rows.
+        assert [a.id for a in list(p.authors)] == [a1.id]
+        assert getattr(p, "_compute_authors__computed_at") is not None
+        assert a1.post_id == p.id
 
         import pytest
 
-        # With strict validation, None is rejected when the return annotation is not Optional.
-        with pytest.raises(TypeError, match="None is not allowed"):
-            p.authors = None
-
-        # setter with unknown id triggers the "id not found" RuntimeError
+        # returning a bad id should raise during normalization
+        p2 = Post(author_ids=[999999])
+        session.add(p2)
+        session.flush()
         with pytest.raises(RuntimeError, match="not found"):
-            p.authors = [999999]
-
-        # deleter clears association
-        p.authors = [a1]
-        del p.authors
-        assert p.authors == []
+            _ = list(p2.authors)
 
 
 def test_materialized_property_decorator_factory_fn_none_path():
@@ -421,21 +421,15 @@ def test_materialized_property_decorator_factory_fn_none_path():
 
 
 def test_normalize_to_id_list_branch_via_inject_list_fk_storage_noop(monkeypatch):
-    """Forces the `normalize_to_id()` list branch.
+    """Removed.
 
-    Normally list[MappedClass] uses association-table storage, which bypasses
-    `normalize_to_id` for list values. Here we force the descriptor to use a
-    JSON backing column by skipping `_inject_list_fk_storage`.
+    list[MappedClass] is now relationship-backed and does not exercise the
+    old `normalize_to_id()` list+fk code paths.
     """
 
-    import etl_decorators.sqlalchemy.materialized.decorator as dec
-    from etl_decorators.sqlalchemy.materialized.descriptor import _MaterializedPropertyDescriptor
+    import pytest
 
-    monkeypatch.setattr(
-        _MaterializedPropertyDescriptor,
-        "_inject_list_fk_storage",
-        lambda self, owner: None,
-    )
+    pytest.skip("list[MappedClass] is relationship-backed; normalize_to_id list+fk paths no longer apply")
 
     class Base(DeclarativeBase):
         pass

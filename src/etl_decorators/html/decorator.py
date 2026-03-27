@@ -22,7 +22,7 @@ def parse_html(fn: Callable[P, Any]) -> Callable[P, Any]: ...
 def parse_html(
     fn: None = None,
     *,
-    extract: str | None = None,
+    extract: str | tuple[str, ...] | None = None,
     extract_as_collection: bool = False,
     convert_to_markdown: bool = False,
 ) -> Callable[[Callable[P, Any]], Callable[P, Any]]: ...
@@ -31,7 +31,7 @@ def parse_html(
 def parse_html(
     fn: Callable[P, Any] | None = None,
     *,
-    extract: str | None = None,
+    extract: str | tuple[str, ...] | None = None,
     extract_as_collection: bool = False,
     convert_to_markdown: bool = False,
 ):
@@ -43,7 +43,9 @@ def parse_html(
     - a file-like resource (implements `.read()`)
 
     Parameters:
-        extract: optional CSS selector (BeautifulSoup `select`).
+        extract: optional CSS selector (BeautifulSoup `select`), or a tuple of
+            selectors. When a tuple is provided, the decorator returns one
+            extracted value per selector.
         extract_as_collection: when True, returns all matches.
         convert_to_markdown: when True, convert the selected HTML (or full
             document if `extract is None`) to Markdown (requires markdownify).
@@ -76,7 +78,7 @@ def parse_html(
 def _process_payload(
     payload: Any,
     *,
-    extract: str | None,
+    extract: str | tuple[str, ...] | None,
     extract_as_collection: bool,
     convert_to_markdown: bool,
 ):
@@ -93,6 +95,29 @@ def _process_payload(
         return soup
 
     # Extraction (CSS selector)
+    if isinstance(extract, tuple):
+        if extract_as_collection:
+            # One list of matches per selector.
+            per_selector = [soup.select(selector) for selector in extract]
+            if convert_to_markdown:
+                return [[_to_markdown(str(tag)) for tag in tags] for tags in per_selector]
+            return per_selector
+
+        # One first-match (or None) per selector.
+        per_first: list[Any] = []
+        for selector in extract:
+            matches = soup.select(selector)
+            if not matches:
+                per_first.append(None)
+                continue
+
+            first = matches[0]
+            if convert_to_markdown:
+                per_first.append(_to_markdown(str(first)))
+            else:
+                per_first.append(first)
+        return per_first
+
     matches = soup.select(extract)
 
     if extract_as_collection:

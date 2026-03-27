@@ -106,6 +106,28 @@ def test_as_model_soft_delete_flags_and_query_filtering():
         assert doc2.deleted_at is not None
 
 
+def test_as_model_instance_delete_hard():
+    class Base(DeclarativeBase):
+        pass
+
+    @as_model(Base, with_soft_deletion="deleted_at", with_primary_key="id")
+    class Doc:
+        title: str
+
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        enable_soft_delete(session)
+        doc = Doc(title="a")
+        session.add(doc)
+        session.flush()
+
+        doc.delete(hard=True)
+        session.flush()
+
+        assert session.with_deleted().query(Doc).count() == 0
+
+
 def test_as_model_with_timestamps_shortcut():
     class Base(DeclarativeBase):
         pass

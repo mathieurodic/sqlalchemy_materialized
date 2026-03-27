@@ -16,11 +16,14 @@ import asyncio
 import inspect
 import random
 import time
+import logging
 from functools import update_wrapper
 from typing import Any, Callable, ParamSpec, TypeVar, overload
 
 from etl_decorators._base.decorators import OptionalFnDecoratorBase
 
+
+logger = logging.getLogger(__name__)
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -220,6 +223,8 @@ def retry(
                             factor=factor,
                             jitter=jitter,
                         )
+                        logger.warning("Retry in %ss after error: %s, %s", delay, e.__class__.__name__, str(e))
+
                         if on_retry is not None:
                             on_retry(e, attempt, delay)
                         if delay > 0:
@@ -249,6 +254,8 @@ def retry(
                             factor=factor,
                             jitter=jitter,
                         )
+                        logger.warning("Retry in %ss after error: %s, %s", delay, e.__class__.__name__, str(e))
+                        
                         if on_retry is not None:
                             on_retry(e, attempt, delay)
                         if delay > 0:

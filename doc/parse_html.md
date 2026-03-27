@@ -15,6 +15,16 @@ The return type depends on `extract`, `extract_as_collection`, and
 - `extract is not None` and `extract_as_collection=True` → `list[bs4.Tag]`
 - with `convert_to_markdown=True` and extraction → `str` / `list[str]`
 
+When `extract` is a **tuple of selectors**, the decorator returns one value per
+selector:
+
+- `extract is tuple[str, ...]` and `extract_as_collection=False` →
+  `list[bs4.Tag | None]`
+- `extract is tuple[str, ...]` and `extract_as_collection=True` →
+  `list[list[bs4.Tag]]`
+- with `convert_to_markdown=True` and tuple extraction →
+  `list[str | None]` / `list[list[str]]`
+
 ## Installation
 
 ```bash
@@ -80,6 +90,30 @@ Semantics when nothing matches:
 
 - `extract_as_collection=False` => returns `None`
 - `extract_as_collection=True` => returns `[]`
+
+### Multiple selectors (tuple)
+
+You can pass multiple selectors by using a tuple.
+
+- When `extract_as_collection=False`, you get a **list of first matches** (or
+  `None`) per selector.
+- When `extract_as_collection=True`, you get a **list of match lists**, one per
+  selector.
+
+```python
+from etl_decorators.html import parse_html
+
+
+@parse_html(extract=("h1", ".item"))
+def page() -> str:
+    return "<div><h1>T</h1><span class='item'>a</span><span class='item'>b</span></div>"
+
+
+# first match per selector
+tags = page()  # list[bs4.Tag | None]
+assert tags[0].name == "h1"
+assert tags[1].name == "span"
+```
 
 ## Converting to Markdown
 

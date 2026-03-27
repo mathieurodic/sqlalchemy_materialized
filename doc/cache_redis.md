@@ -54,6 +54,10 @@ Notes:
   - decorators *below* `@cache(...)` do affect cache invalidation
   If the source file cannot be read or the function block cannot be extracted,
   decoration fails with a clear `RuntimeError`.
+- You can opt out of code-based invalidation by passing
+  `key_depends_on_function_code=False` to `@cache(...)`. In that case the
+  `function_code_hash` segment becomes empty and the key depends only on
+  `prefix` and the argument hash.
 - `arguments_tuple_hash` is computed from the function signature + bound
   args/kwargs (defaults applied).
 

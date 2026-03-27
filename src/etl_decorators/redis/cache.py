@@ -92,6 +92,7 @@ class RedisCache:
         write_ttl: timedelta | float = timedelta(hours=1),
         serialization: Serialization = "pickle",
         fail_open: bool = True,
+        key_depends_on_function_code: bool = True,
         bypass_kw: str | None = "cache",
         refresh_kw: str | None = "refresh",
     ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
@@ -104,6 +105,10 @@ class RedisCache:
         write_ttl: timedelta | float = timedelta(hours=1),
         serialization: Serialization = "pickle",
         fail_open: bool = True,
+        # By default, include a best-effort hash of the decorated function's
+        # source code in the cache key. This matches the documentation and
+        # ensures cache invalidation when code changes.
+        key_depends_on_function_code: bool = True,
         bypass_kw: str | None = "cache",
         refresh_kw: str | None = "refresh",
     ):
@@ -123,6 +128,7 @@ class RedisCache:
                     write_ttl=write_ttl,
                     serialization=serialization,
                     fail_open=fail_open,
+                    key_depends_on_function_code=key_depends_on_function_code,
                     bypass_kw=bypass_kw,
                     refresh_kw=refresh_kw,
                 )
@@ -137,6 +143,7 @@ class RedisCache:
             write_ttl=write_ttl,
             serialization=serialization,
             fail_open=fail_open,
+            key_depends_on_function_code=key_depends_on_function_code,
             bypass_kw=bypass_kw,
             refresh_kw=refresh_kw,
         )
@@ -151,10 +158,11 @@ class RedisCache:
         write_ttl: timedelta | float,
         serialization: Serialization,
         fail_open: bool,
+        key_depends_on_function_code: bool,
         bypass_kw: str | None,
         refresh_kw: str | None,
     ) -> Callable[P, R]:
-        code_hash = callsite_code_hash(
+        code_hash = "" if not key_depends_on_function_code else callsite_code_hash(
             filename=callsite_filename,
             start_lineno=callsite_end_lineno + 1,
         )

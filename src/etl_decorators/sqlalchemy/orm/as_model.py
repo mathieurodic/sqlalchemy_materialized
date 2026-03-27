@@ -3,14 +3,17 @@ from __future__ import annotations
 import inspect
 import sys
 from datetime import datetime
-from typing import Any, Callable, get_type_hints
+from typing import Any, Callable, Optional, get_type_hints
 
 import sqlalchemy as sa
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import Mapped
+from sqlalchemy.orm import Session
 
 from ..materialized.helpers import _is_mapped_class
 from ..utils.typing import unwrap_optional
+from ..vector_indexing.registry import register_vector_index
+from ..vector_indexing.types import VectorIndexedString
 from .columns import make_sa_column
 from .field import _Field, _MISSING
 from .soft_delete import register_soft_delete_model, soft_delete_instance
@@ -103,6 +106,8 @@ def as_model(
         factories: dict[str, Callable[..., Any]] = {}
         required_relationships: set[str] = set()
 
+        vector_indexed: dict[str, Callable[[str], object]] = {}
+
         def _field_info(name: str) -> tuple[Any, dict[str, Any]]:
             """Return (default_marker/value, column_kwargs)."""
             v = cls.__dict__.get(name, _MISSING)
@@ -112,6 +117,8 @@ def as_model(
                     defaults[name] = v.default
                 if v.default_factory is not None:
                     factories[name] = v.default_factory
+                if v.index_embedding_using is not None:
+                    vector_indexed[name] = v.index_embedding_using
                 return _MISSING, dict(v.column_kwargs or {})
 
             if v is not _MISSING:
@@ -176,12 +183,29 @@ def as_model(
 
             # Scalar/list/pydantic/sqlalchemy type column.
             mapped_annotations[name] = Mapped[ann]
-            namespace[name] = make_sa_column(
-                name,
-                ann,
-                nullable=None,  # infer from Optional[T]
-                **col_kwargs,
-            )
+
+            if name in vector_indexed:
+                # Vector indexing currently only supports str columns.
+                inner2, _opt2 = unwrap_optional(ann)
+                if inner2 is not str:
+                    raise TypeError(
+                        "field(index_embedding_using=...): only supported for `str` annotations (SQLite only for now)."
+                    )
+
+                # Replace the SQLA type to add a comparator (`similarity_with`).
+                namespace[name] = sa.orm.mapped_column(
+                    name,
+                    VectorIndexedString(embedder=vector_indexed[name]),
+                    nullable=None,
+                    **col_kwargs,
+                )
+            else:
+                namespace[name] = make_sa_column(
+                    name,
+                    ann,
+                    nullable=None,  # infer from Optional[T]
+                    **col_kwargs,
+                )
 
         namespace["__annotations__"] = {
             **getattr(cls, "__annotations__", {}),
@@ -191,11 +215,78 @@ def as_model(
         # Create the mapped class.
         model_cls = type(cls.__name__, (Base,), namespace)
 
+        # Configure vector indexing once the mapped class exists.
+        for col_name, embedder in vector_indexed.items():
+            # Fill vec table name in the type decorator (needed by comparator).
+            col = model_cls.__table__.c[col_name]
+            if isinstance(col.type, VectorIndexedString):
+                col.type._vec_table = f"_{model_cls.__tablename__}__{col_name}__vec"
+
+            register_vector_index(model_cls=model_cls, column_name=col_name, embedder=embedder)
+
+        @classmethod
+        def upsert(
+            cls,
+            session: Session,
+            __searched_keys__: tuple[str, ...] | None = None,
+            __autoflush__: bool = True,
+            **kwargs,
+        ):
+            """Create or update an instance based on a lookup.
+
+            Parameters
+            ----------
+            session:
+                SQLAlchemy session used for the lookup and persistence.
+            **kwargs:
+                Values to search/update/insert with.
+
+            Special keyword-only parameters
+            -------------------------------
+            __searched_keys__:
+                Optional tuple of keys from kwargs to use for the lookup.
+                When omitted / None, *all* keys provided in kwargs are used.
+            __autoflush__:
+                When True (default), this method calls ``session.flush()``
+                before returning.
+
+            Returns
+            -------
+            Instance of ``cls``.
+            """
+
+            searched_keys = __searched_keys__ if __searched_keys__ is not None else tuple(kwargs.keys())
+
+            if not searched_keys:  # pragma: no cover
+                raise ValueError("upsert(): no search keys provided")
+
+            missing = [k for k in searched_keys if k not in kwargs]
+            if missing:
+                raise ValueError(
+                    "upsert(): missing searched key(s) in kwargs: " + ", ".join(missing)
+                )
+
+            filters = [getattr(cls, k) == kwargs[k] for k in searched_keys]
+            instance = session.query(cls).filter(*filters).one_or_none()
+
+            if instance is None:
+                instance = cls(**kwargs)
+            else:
+                for k, v in kwargs.items():
+                    setattr(instance, k, v)
+
+            session.add(instance)
+            if __autoflush__:
+                session.flush()
+            return instance
+
+        model_cls.upsert = upsert  # type: ignore[assignment]
+
         if with_soft_deletion:
             register_soft_delete_model(model_cls, with_soft_deletion)
 
-            def delete(self):  # type: ignore[no-redef]
-                soft_delete_instance(self)
+            def delete(self, *, hard: bool = False):  # type: ignore[no-redef]
+                soft_delete_instance(self, hard=hard)
 
             model_cls.delete = delete  # type: ignore[assignment]
 
@@ -212,9 +303,24 @@ def as_model(
                 setattr(target, updated_attr, sa.func.now())
 
         # Second pass: inject reverse relationships onto targets.
+        #
+        # IMPORTANT:
+        # We must NOT use `hasattr()` here.
+        #
+        # Some projects define descriptors (e.g. SQLAlchemy hybrid properties)
+        # on mapped classes whose `__get__` / expression comparator may raise
+        # at class access time (notably our `materialized_property` for
+        # list[...] return types, whose SQL expression is intentionally
+        # unsupported).
+        #
+        # `hasattr(target_cls, reverse_attr)` would evaluate the descriptor and
+        # can crash during model decoration.
+        #
+        # `inspect.getattr_static()` checks for the presence of the attribute
+        # without triggering descriptor evaluation.
         for name, target_cls, _is_optional, spec in rel_specs:
             reverse_attr = spec["reverse"]
-            if hasattr(target_cls, reverse_attr):
+            if inspect.getattr_static(target_cls, reverse_attr, _MISSING) is not _MISSING:
                 continue
 
             setattr(

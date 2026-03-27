@@ -70,6 +70,42 @@ def test_materialized_property_list_pydantic_roundtrip_sqlite():
         assert [x.a for x in p2] == [10, 11]
 
 
+def test_materialized_property_list_pydantic_accepts_dict_items_and_validates():
+    """Regression: descriptor.validate_value should allow dict/json items.
+
+    The backing column uses PydanticJSONList(Payload), which accepts items as
+    Payload | dict | str(json). The materialized_property runtime validator
+    should not reject dict items.
+    """
+
+    from etl_decorators.sqlalchemy import materialized_property
+
+    def compute(self) -> list[Payload]:
+        # Return dicts, not Payload instances.
+        return [{"a": self.base}, {"a": self.base + 1}]  # type: ignore[return-value]
+
+    class Base(DeclarativeBase):
+        pass
+
+    class Model(Base):
+        __tablename__ = "model_list_pydantic_dict_items"
+        __allow_unmapped__ = True
+
+        id: Mapped[int] = mapped_column(primary_key=True)
+        base: Mapped[int] = mapped_column(sa.Integer)
+        payloads = materialized_property(compute)
+
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        m = Model(base=5)
+        session.add(m)
+        session.flush()
+
+        items = m.payloads
+        assert [x.a for x in items] == [5, 6]
+
+
 def test_materialized_property_list_mappedclass_resolves_in_session_but_raises_detached():
     from etl_decorators.sqlalchemy import materialized_property
 
@@ -94,8 +130,16 @@ def test_materialized_property_list_mappedclass_resolves_in_session_but_raises_d
         author_ids: Mapped[list[int]] = mapped_column(sa.JSON)
         authors = materialized_property(compute_authors)
 
-    # backing storage is an association table (no authors column on post_list)
+    # relationship-based storage: no association table should exist, and
+    # Author has a nullable FK column.
     assert "authors" not in Post.__table__.c
+    assert "post_id" in Author.__table__.c
+    assert Author.__table__.c.post_id.nullable is True
+
+    # authors is now a relationship attribute (InstrumentedAttribute)
+    from sqlalchemy.orm.attributes import InstrumentedAttribute
+
+    assert isinstance(Post.authors, InstrumentedAttribute)
 
     engine = sa.create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -109,11 +153,13 @@ def test_materialized_property_list_mappedclass_resolves_in_session_but_raises_d
         session.add(p)
         session.flush()
 
-        resolved = p.authors
+        resolved = list(p.authors)
         assert [a.id for a in resolved] == [a1.id, a2.id]
+        assert a1.post_id == p.id
+        assert a2.post_id == p.id
 
         session.expunge(p)
         import pytest
 
         with pytest.raises(RuntimeError, match="detached"):
-            _ = p.authors
+            _ = list(p.authors)

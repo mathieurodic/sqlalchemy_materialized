@@ -100,10 +100,13 @@ class LLM:
 
     model: str
     api_key: str | None = field(default=None, repr=False)
+    temperature: float = 0.1
     completion_kwargs: dict[str, Any] = field(default_factory=dict)
 
     def _completion_kwargs(self) -> dict[str, Any]:
-        return dict(self.completion_kwargs or {})
+        kwargs = dict(self.completion_kwargs or {})
+        kwargs.setdefault("temperature", self.temperature)
+        return kwargs
 
     @overload
     def __call__(self, fn: _PromptFn[P]) -> Callable[P, str]: ...
@@ -259,7 +262,22 @@ class LLM:
 
         return decorated
 
+    def _ensure_model_registration(self):
+        cls = self.__class__
+        if not hasattr(cls, "_registered_models"):
+            cls._registered_models = set()
+        if self.model not in cls._registered_models:
+            import litellm
+            litellm.register_model({
+                self.model: {
+                    "supports_response_schema": True,
+                    "supports_function_calling": True,
+                }
+            })
+            cls._registered_models.add(self.model)
+
     def request(self, prompt: str, *, return_type: type[BaseModel] | None):
+        self._ensure_model_registration()
         try:
             import litellm
         except Exception as e:  # pragma: no cover
@@ -300,6 +318,7 @@ class LLM:
 
         if return_type is not None:
             kwargs.setdefault("response_format", response_format_arg(return_type))
+            kwargs["allowed_openai_params"] = ["response_format"]
 
         # acompletion is optional in some litellm versions; provide a good error.
         if not hasattr(litellm, "acompletion"):

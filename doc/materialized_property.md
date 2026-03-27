@@ -51,7 +51,7 @@ with Session(engine) as session:
 - If the return type is a mapped class (or `Optional[Model]`), the backing column is created as a FK to the PK.
 - `list[T]` return types are supported:
   - `list[int]`, `list[str]`, ... => JSON column
-  - `list[MappedClass]` => generated association table preserving order
+  - `list[MappedClass]` => injected one-to-many relationship (nullable FK on the item class); no association table; order not preserved
 - The computation requires the instance to be attached to a SQLAlchemy `Session`.
 
 ### Using with other decorators (stacking)
@@ -145,7 +145,7 @@ Semantics:
   collection relationships (append/remove/bulk replace).
 - Invalidation is **in-memory only** (no implicit flush).
 - Invalidation clears the cached storage and resets `{name}__computed_at` to `NULL`.
-- For `list[MappedClass]`, invalidation clears the association rows (but does **not** delete target rows).
+- For `list[MappedClass]`, invalidation clears the relationship collection (but does **not** delete target rows).
 
 ## Querying (filter / order_by)
 
@@ -203,8 +203,12 @@ On instances, access requires a Session:
 
 - `list[int]`, `list[str]`, ...: stored in a JSON column.
 - `list[pydantic.BaseModel]`: stored in a JSON column with validation/round-trip.
-- `list[MappedClass]`: stored in a generated association table (one row per item + position),
-  preserving order and improving integrity vs storing PKs in JSON.
+- `list[MappedClass]`: stored using an injected one-to-many relationship:
+  - `Owner.<prop>` is a `relationship(Child, back_populates=<owner_name>)`
+  - `Child.<owner_name>_id` is a **nullable** FK column to the owner's PK
+  - `Child.<owner_name>` is a scalar relationship back to the owner
+  - no association table is created
+  - ordering is **not** preserved
 
 For `list[MappedClass]`, access also requires a Session (detached instances are not supported).
 

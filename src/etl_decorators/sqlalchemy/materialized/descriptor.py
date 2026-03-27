@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from datetime import datetime, timezone
 import logging
+import json
 from typing import Any, Callable, get_args, get_origin, get_type_hints
 
 import sqlalchemy as sa
@@ -13,7 +14,7 @@ from ..utils.typing import unwrap_optional
 from .config import _MaterializedConfig
 from .depends_on import setup_dependency_invalidation
 from .helpers import _is_mapped_class, _pk_id_from_instance, _require_session
-from .list_fk import inject_list_fk_storage
+from .list_fk import inject_list_o2m_fk_storage
 
 
 logger = logging.getLogger(__name__)
@@ -31,8 +32,6 @@ class _MaterializedPropertyDescriptor:
 
         # We only know the public property name in __set_name__.
         self._prop_name: str | None = None
-        self._list_assoc_attr: str | None = None
-        self._list_assoc_cls: type | None = None
 
         # We need the return type, but on Python modules using
         # `from __future__ import annotations`, the return annotation is stored
@@ -95,6 +94,21 @@ class _MaterializedPropertyDescriptor:
         self._set_return_type_from_annotation(return_ann)
 
     def __set_name__(self, owner, name):
+        # `materialized_property` is commonly used on classes that are later
+        # transformed into SQLAlchemy mapped classes (e.g. via our `@as_model`
+        # decorator).
+        #
+        # In such setups, Python calls `__set_name__` once on the *plain*
+        # (non-mapped) class at definition time, and again when the mapped
+        # class is created.
+        #
+        # We must therefore **skip** storage/relationship injection on
+        # non-mapped classes, otherwise list[MappedClass] properties would try
+        # to inject relationships before the owner has a primary key.
+        if not hasattr(owner, "registry") or not hasattr(owner, "metadata"):
+            self._prop_name = name
+            return
+
         # Resolve return type now that we know the owning class (needed for
         # string annotations when `from __future__ import annotations` is used).
         if self.return_type is None:
@@ -102,12 +116,15 @@ class _MaterializedPropertyDescriptor:
 
         self._prop_name = name
 
-        # 1) list[MappedClass] is stored via association table + relationship
-        #    (not a JSON column).
+        # 1) Storage injection
+        #
+        # - list[MappedClass] is stored via an injected one-to-many relationship
+        #   (nullable FK on the child).
+        # - Everything else uses a backing column on the owner.
         if self._is_list and self._is_fk:
-            self._inject_list_fk_storage(owner)
+            inject_list_o2m_fk_storage(self, owner)
         else:
-            # Inject the backing DB column into the class
+            # Inject the backing DB column into the class.
             # materialized_property backing columns must start nullable because
             # they are NULL until computed.
             col = make_sa_column(name, self.return_type, nullable=True)
@@ -121,14 +138,106 @@ class _MaterializedPropertyDescriptor:
         )
         setattr(owner, self.computed_at_attr, computed_at_col)
 
-        # 3) Build and inject the hybrid property, replacing ourselves
-        setattr(owner, name, self._make_hybrid(owner))
+        # 3) Inject public API
+        #
+        # For list[MappedClass], the public attribute is the relationship that
+        # was injected above; we do NOT replace it with a hybrid_property.
+        if not (self._is_list and self._is_fk):
+            setattr(owner, name, self._make_hybrid(owner))
 
         # 4) Optional automatic invalidation when dependencies change
         setup_dependency_invalidation(self, owner)
 
-    def _inject_list_fk_storage(self, owner):
-        inject_list_fk_storage(self, owner)
+    # --- helpers used by relationship materialization (list[MappedClass]) ---
+    def _validate_list_fk_value(self, value: Any) -> None:
+        """Runtime validation for list[MappedClass] compute results.
+
+        This mirrors the `validate_value()` semantics used by the hybrid
+        property implementation.
+        """
+
+        if not self.config.validate:
+            return
+
+        prop_name = self._prop_name or self.cache_attr
+        is_optional = bool(self._is_optional)
+
+        if value is None:
+            if is_optional:
+                return
+            raise TypeError(
+                f"materialized_property {prop_name}: None is not allowed (return annotation is not Optional)"
+            )
+
+        if not isinstance(value, list):
+            raise TypeError(
+                f"materialized_property {prop_name}: expected a list for list[...] return type, received: {type(value)!r}"
+            )
+
+        child_cls = self._list_item_type
+        if child_cls is None:
+            raise RuntimeError(
+                "materialized_property: internal error (missing list item type)"
+            )
+
+        # FK-ish list: accept instances or identifiers.
+        for item in value:
+            if item is None:
+                raise TypeError(
+                    f"materialized_property {prop_name}: list[...] does not accept None items"
+                )
+            if isinstance(item, child_cls):
+                # Fail early for transient instances.
+                _pk_id_from_instance(item)
+                continue
+            # identifiers: accept non-bool ints.
+            if isinstance(item, bool):
+                raise TypeError(
+                    f"materialized_property {prop_name}: list items must be mapped instances or identifiers; received: {type(item)!r}"
+                )
+            if isinstance(item, int):
+                continue
+
+            # Best-effort: for non-int PKs, allow any scalar-ish identifier.
+            # Resolution will happen via session.get() which may still fail.
+            if isinstance(item, (str, bytes)):
+                continue
+
+            raise TypeError(
+                f"materialized_property {prop_name}: list items must be mapped instances or identifiers; received: {type(item)!r}"
+            )
+
+    def _normalize_list_fk_to_instances(
+        self, owner_obj: Any, value: Any, child_cls: type
+    ) -> list[Any]:
+        """Accept list[instance|id] and return list[instances]."""
+
+        session = _require_session(owner_obj)
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise TypeError(
+                "materialized_property: expected a list for list[...] return type, "
+                f"received: {type(value)!r}"
+            )
+        out: list[Any] = []
+        for item in value:
+            if item is None:
+                raise TypeError(
+                    "materialized_property: list[MappedClass] does not accept None items"
+                )
+            if isinstance(item, child_cls):
+                _pk_id_from_instance(item)
+                out.append(item)
+                continue
+            inst = session.get(child_cls, item)
+            if inst is None:
+                raise RuntimeError(
+                    "materialized_property: unable to resolve identifier from list[MappedClass] "
+                    f"(id={item!r} not found)"
+                )
+            out.append(inst)
+        return out
 
     def _make_hybrid(self, owner):
         cache_attr = self.cache_attr
@@ -141,9 +250,7 @@ class _MaterializedPropertyDescriptor:
         is_optional = self._is_optional
         target_cls = self._list_item_type if is_list else self.return_type
         list_item_type = self._list_item_type
-        list_assoc_attr = self._list_assoc_attr
-        list_assoc_cls = self._list_assoc_cls
-        is_list_fk = bool(is_list and is_fk and list_assoc_attr and list_assoc_cls)
+        is_list_fk = False
 
         prop_name = self._prop_name or cache_attr
 
@@ -195,6 +302,16 @@ class _MaterializedPropertyDescriptor:
             if not validate:
                 return
 
+            # Best-effort pydantic support:
+            # - For list[BaseModelSubclass], our column type is PydanticJSONList,
+            #   which accepts items as model | dict | str(json).
+            # - For scalar BaseModelSubclass, our column type is PydanticJSON,
+            #   which accepts model | dict | str(json).
+            try:
+                from pydantic import BaseModel as _PydanticBaseModel  # type: ignore
+            except Exception:  # pragma: no cover
+                _PydanticBaseModel = None  # type: ignore[assignment]
+
             if value is None:
                 if is_optional:
                     return
@@ -228,6 +345,41 @@ class _MaterializedPropertyDescriptor:
 
                 # Non-FK list: enforce element type when it's a real Python type.
                 item_t = list_item_type
+
+                # Pydantic list: accept Foo | dict | str(json)
+                if (
+                    _PydanticBaseModel is not None
+                    and isinstance(item_t, type)
+                    and issubclass(item_t, _PydanticBaseModel)
+                ):
+                    for item in value:
+                        if item is None:
+                            _raise_type("list[...] does not accept None items")
+                        if isinstance(item, item_t):
+                            continue
+                        if isinstance(item, dict):
+                            # Validate eagerly to raise clear errors.
+                            item_t.model_validate(item)
+                            continue
+                        if isinstance(item, str):
+                            # Validate JSON string eagerly.
+                            try:
+                                if hasattr(item_t, "model_validate_json"):
+                                    item_t.model_validate_json(item)
+                                else:  # pragma: no cover
+                                    item_t.model_validate(json.loads(item))
+                            except Exception as e:
+                                raise TypeError(
+                                    f"materialized_property {prop_name}: invalid JSON for {item_t.__name__}"
+                                ) from e
+                            continue
+
+                        _raise_type(
+                            "list items must be BaseModel | dict | str(json); "
+                            f"received: {type(item)!r}"
+                        )
+                    return
+
                 if item_t in (Any, object) or not isinstance(item_t, type):
                     return
                 for item in value:
@@ -255,10 +407,92 @@ class _MaterializedPropertyDescriptor:
 
             # Non-FK scalar
             rt = self.return_type
+
+            # Pydantic scalar: accept Foo | dict | str(json)
+            if (
+                _PydanticBaseModel is not None
+                and isinstance(rt, type)
+                and issubclass(rt, _PydanticBaseModel)
+            ):
+                if isinstance(value, rt):
+                    return
+                if isinstance(value, dict):
+                    rt.model_validate(value)
+                    return
+                if isinstance(value, str):
+                    try:
+                        if hasattr(rt, "model_validate_json"):
+                            rt.model_validate_json(value)
+                        else:  # pragma: no cover
+                            rt.model_validate(json.loads(value))
+                    except Exception as e:
+                        raise TypeError(
+                            f"materialized_property {prop_name}: invalid JSON for {rt.__name__}"
+                        ) from e
+                    return
+                _raise_type(
+                    "expected BaseModel | dict | str(json), "
+                    f"received: {type(value)!r}"
+                )
+
             if rt in (Any, object) or not isinstance(rt, type):
                 return
             if not isinstance(value, rt):
                 _raise_type(f"expected {rt!r}, received: {type(value)!r}")
+
+        def _coerce_pydantic_scalar(model_cls: type, value: Any) -> Any:
+            """Coerce dict/str into a BaseModel instance (best-effort)."""
+
+            if value is None:
+                return None
+            if isinstance(value, model_cls):
+                return value
+            if isinstance(value, dict):
+                return model_cls.model_validate(value)
+            if isinstance(value, str):
+                # Prefer pydantic's JSON parsing.
+                if hasattr(model_cls, "model_validate_json"):
+                    return model_cls.model_validate_json(value)
+                return model_cls.model_validate(json.loads(value))  # pragma: no cover
+            return value
+
+        def coerce_value(value: Any) -> Any:
+            """Ensure the in-memory value matches the annotated return type.
+
+            This is especially important for pydantic JSON columns: the
+            TypeDecorator will coerce on flush/load, but the first access to a
+            just-computed value should already return BaseModel instances.
+            """
+
+            try:
+                from pydantic import BaseModel as _PydanticBaseModel  # type: ignore
+            except Exception:  # pragma: no cover
+                _PydanticBaseModel = None  # type: ignore[assignment]
+
+            if _PydanticBaseModel is None:
+                return value
+
+            # list[BaseModel]
+            if is_list and not is_fk:
+                item_t = list_item_type
+                if (
+                    isinstance(item_t, type)
+                    and issubclass(item_t, _PydanticBaseModel)
+                    and isinstance(value, list)
+                ):
+                    return [_coerce_pydantic_scalar(item_t, v) for v in value]
+
+            # scalar BaseModel
+            rt = self.return_type
+            if (
+                not is_list
+                and not is_fk
+                and isinstance(rt, type)
+                and issubclass(rt, _PydanticBaseModel)
+            ):
+                return _coerce_pydantic_scalar(rt, value)
+
+            return value
 
         def normalize_to_id(value):
             if not is_fk:
@@ -335,10 +569,7 @@ class _MaterializedPropertyDescriptor:
             if computed_at is None:
                 session = _require_session(self)
 
-                if is_list_fk:
-                    old_cache = list(getattr(self, list_assoc_attr))
-                else:
-                    old_cache = getattr(self, cache_attr)
+                old_cache = getattr(self, cache_attr)
                 old_computed_at = getattr(self, computed_at_attr)
 
                 try:
@@ -350,21 +581,12 @@ class _MaterializedPropertyDescriptor:
                     with cm:
                         computed = compute_fn(self)
                         validate_value(computed)
+                        computed = coerce_value(computed)
 
-                        if is_list_fk:
-                            targets = normalize_list_fk_to_instances(self, computed)
-                            assoc_rows = [
-                                list_assoc_cls(pos=i, target=t)
-                                for i, t in enumerate(targets)
-                            ]
-                            setattr(self, list_assoc_attr, assoc_rows)
-                            setattr(self, computed_at_attr, datetime.now(timezone.utc))
-                            session.flush()
-                        else:
-                            normalized = normalize_to_id(computed)
-                            setattr(self, cache_attr, normalized)
-                            setattr(self, computed_at_attr, datetime.now(timezone.utc))
-                            session.flush()
+                        normalized = normalize_to_id(computed)
+                        setattr(self, cache_attr, normalized)
+                        setattr(self, computed_at_attr, datetime.now(timezone.utc))
+                        session.flush()
                 except Exception as e:
                     logger.error(
                         "materialized_property compute failed (%s): %s",
@@ -381,13 +603,6 @@ class _MaterializedPropertyDescriptor:
                     setattr(self, cache_attr, old_cache)
                     setattr(self, computed_at_attr, old_computed_at)
                     raise
-
-            # Fast path for list[MappedClass]
-            if is_list_fk:
-                # Even if already materialized, we require a Session for FK-like
-                # materialized properties. This keeps the API consistent.
-                _require_session(self)
-                return [row.target for row in getattr(self, list_assoc_attr)]
 
             # Fast path for non-FK
             if not is_fk:
@@ -417,24 +632,14 @@ class _MaterializedPropertyDescriptor:
         @prop.setter
         def prop(self, value):
             validate_value(value)
-            if is_list_fk:
-                targets = normalize_list_fk_to_instances(self, value)
-                assoc_rows = [
-                    list_assoc_cls(pos=i, target=t) for i, t in enumerate(targets)
-                ]
-                setattr(self, list_assoc_attr, assoc_rows)
-                setattr(self, computed_at_attr, datetime.now(timezone.utc))
-            else:
-                setattr(self, cache_attr, normalize_to_id(value))
-                setattr(self, computed_at_attr, datetime.now(timezone.utc))
+            value = coerce_value(value)
+            setattr(self, cache_attr, normalize_to_id(value))
+            setattr(self, computed_at_attr, datetime.now(timezone.utc))
 
         @prop.deleter
         def prop(self):
             session = _require_session(self)
-            if is_list_fk:
-                setattr(self, list_assoc_attr, [])
-            else:
-                setattr(self, cache_attr, None)
+            setattr(self, cache_attr, None)
             setattr(self, computed_at_attr, None)
             session.flush()
 

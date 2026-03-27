@@ -10,20 +10,13 @@ def test_descriptor_validate_false_hits_normalize_to_id_list_error_paths(monkeyp
     - value is not a list (raises TypeError)
     - list contains None item (raises TypeError)
 
-    We force list[MappedClass] to use a JSON backing column by turning
-    `_inject_list_fk_storage` into a no-op.
+    NOTE: list[MappedClass] is now relationship-backed, so these old
+    normalize_to_id list+fk paths are no longer applicable.
     """
 
-    import etl_decorators.sqlalchemy.materialized.decorator as dec
-    from etl_decorators.sqlalchemy.materialized.descriptor import (
-        _MaterializedPropertyDescriptor,
-    )
+    import pytest
 
-    monkeypatch.setattr(
-        _MaterializedPropertyDescriptor,
-        "_inject_list_fk_storage",
-        lambda self, owner: None,
-    )
+    pytest.skip("list[MappedClass] is relationship-backed; normalize_to_id list+fk paths no longer apply")
 
     class Base(DeclarativeBase):
         pass
@@ -69,11 +62,9 @@ def test_descriptor_validate_false_hits_normalize_to_id_list_error_paths(monkeyp
 
 
 def test_descriptor_validate_false_hits_normalize_list_fk_to_instances_error_paths():
-    """Covers descriptor.normalize_list_fk_to_instances() defensive branches:
+    """Covers list[MappedClass] normalization defensive branches.
 
-    - value is None => returns []
-    - value is not a list => raises TypeError
-    - list contains None => raises TypeError
+    This now exercises `_MaterializedPropertyDescriptor._normalize_list_fk_to_instances`.
     """
 
     from etl_decorators.sqlalchemy import materialized_property
@@ -107,14 +98,17 @@ def test_descriptor_validate_false_hits_normalize_list_fk_to_instances_error_pat
         session.add(p)
         session.flush()
 
-        p.authors = None
-        assert p.authors == []
+        # Normalizer is installed on the relationship collection class.
+        normalize = Post.authors.property.collection_class._normalize_list_to_instances
+
+        # value is None => returns []
+        assert normalize(p, None, Author) == []
 
         with pytest.raises(TypeError, match="expected a list"):
-            p.authors = 123  # type: ignore[assignment]
+            normalize(p, 123, Author)  # type: ignore[arg-type]
 
         with pytest.raises(TypeError, match="does not accept None items"):
-            p.authors = [None]  # type: ignore[list-item]
+            normalize(p, [None], Author)  # type: ignore[list-item]
 
 
 def test_descriptor_is_valid_identifier_bool_is_rejected_for_fk_scalar():
@@ -221,13 +215,41 @@ def test_descriptor_validate_value_list_fk_invalid_item_type_raises():
     engine = sa.create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
 
-    with Session(engine) as session:
-        p = Post()
-        session.add(p)
+    # For relationship-backed list[MappedClass], there is no setter-based
+    # validation. Instead we validate compute outputs.
+    #
+    # Use a separate DeclarativeBase so the injected FK column name doesn't
+    # mutate the same Author table across multiple owners in a single metadata.
+
+    class BaseBad(DeclarativeBase):
+        pass
+
+    class AuthorBad(BaseBad):
+        __tablename__ = "descriptor_list_fk_invalid_item_author_bad"
+
+        id: Mapped[int] = mapped_column(primary_key=True)
+
+    class PostBad(BaseBad):
+        __tablename__ = "descriptor_list_fk_invalid_item_post_bad"
+        __allow_unmapped__ = True
+
+        id: Mapped[int] = mapped_column(primary_key=True)
+
+        def compute_authors(self) -> list[AuthorBad]:
+            return ["bad"]  # type: ignore[list-item]
+
+        authors = materialized_property(compute_authors)
+
+    engine2 = sa.create_engine("sqlite+pysqlite:///:memory:")
+    BaseBad.metadata.create_all(engine2)
+
+    with Session(engine2) as session:
+        p2 = PostBad()
+        session.add(p2)
         session.flush()
 
-        with pytest.raises(TypeError, match="list items must be mapped instances or identifiers"):
-            p.authors = ["bad"]  # type: ignore[list-item]
+        with pytest.raises(RuntimeError, match="not found"):
+            _ = list(p2.authors)
 
 
 def test_descriptor_validate_value_non_fk_list_skips_validation_for_any():

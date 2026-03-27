@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "etl-decorators"
-version = "0.3.0"
+version = "0.4.0"
 description = "A collection of small, focused decorators for ETL / data applications."
 authors = [
     { name="Mathieu Rodic", email="mathieu@rodic.fr" }
@@ -26,6 +26,8 @@ Homepage = "https://github.com/mathieurodic/etl-decorators"
 sqlalchemy = [
     "sqlalchemy>=1.4",
     "pydantic>=2",
+    # Required for `field(index_embedding_using=...)` vector indexing on SQLite.
+    "sqlite-vec",
 ]
 llms = [
     "litellm",
@@ -53,6 +55,8 @@ test = [
     "pytest-cov",
     "python-dotenv",
     "fakeredis",
+    "numpy",
+    "sqlite-vec",
     # Keep test environment fully-featured by including all optional deps.
     # NOTE: Avoid self-referential extras (e.g. "etl-decorators[xml]") here,
     # as some installers may skip/ignore them when resolving the current
