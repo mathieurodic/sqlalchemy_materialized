@@ -92,6 +92,9 @@ Supported out of the box:
 - `list[T]` → stored as JSON
 - `pydantic.BaseModel` and `list[BaseModel]` → stored as JSON via
   `PydanticJSON` / `PydanticJSONList`
+- `enum.Enum` subclasses → stored as `VARCHAR` via `sa.Enum(cls, native_enum=False)`,
+  works on both PostgreSQL and SQLite. Both `str, Enum` and `float, Enum`
+  (or any other mixin) are supported. Values are compared by their `.value`.
 - SQLAlchemy types:
   - `JSON`, `sa.String`, ...
   - type instances like `PydanticJSON(Payload)`

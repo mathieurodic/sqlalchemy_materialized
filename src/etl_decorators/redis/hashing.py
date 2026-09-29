@@ -47,7 +47,8 @@ def callsite_code_hash(*, filename: str, start_lineno: int) -> str:
     """
 
     try:
-        raw = open(filename, "r", encoding="utf-8").read().splitlines(True)
+        with open(filename, "r", encoding="utf-8") as f:
+            raw = f.read().splitlines(True)
     except Exception as e:
         raise RuntimeError(f"Unable to read source file for caching: {filename!r}: {e}") from e
 

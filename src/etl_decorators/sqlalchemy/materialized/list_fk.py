@@ -119,6 +119,7 @@ def inject_list_o2m_fk_storage(
         rel.collection_class._child_cls = child_cls  # type: ignore[attr-defined]
         rel.collection_class._child_owner_attr = child_owner_attr  # type: ignore[attr-defined]
         rel.collection_class._in_transaction = descriptor.config.in_transaction  # type: ignore[attr-defined]
+        rel.collection_class._autocommit = descriptor.config.autocommit  # type: ignore[attr-defined]
         rel.collection_class._validate_value = staticmethod(descriptor._validate_list_fk_value)  # type: ignore[attr-defined]
         rel.collection_class._normalize_list_to_instances = staticmethod(descriptor._normalize_list_fk_to_instances)  # type: ignore[attr-defined]
         rel.collection_class._materializing_guard_attr = f"_{descriptor.fn.__name__}__materializing"  # type: ignore[attr-defined]

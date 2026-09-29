@@ -41,6 +41,7 @@ class _MaterializedO2MList(list):
     _child_cls: type | None = None
     _child_owner_attr: str | None = None
     _in_transaction: bool = True
+    _autocommit: bool = False
     _validate_value: Callable[[Any], None] | None = None
     _normalize_list_to_instances: Callable[[Any, Any, type], list[Any]] | None = None
     _materializing_guard_attr: str | None = None
@@ -74,6 +75,9 @@ class _MaterializedO2MList(list):
         in_transaction = self._in_transaction
         if in_transaction is True:
             in_transaction = bool(getattr(self.__class__, "_in_transaction", True))
+        autocommit = self._autocommit
+        if autocommit is False:
+            autocommit = bool(getattr(self.__class__, "_autocommit", False))
         guard_attr = self._materializing_guard_attr or getattr(
             self.__class__, "_materializing_guard_attr", None
         )
@@ -123,10 +127,28 @@ class _MaterializedO2MList(list):
                 self._loaded_from_db = True
                 return
 
-            fk_attr = f"{type(owner).__name__.lower()}_id"
-            if not hasattr(child_cls, fk_attr):
-                self._loaded_from_db = True
-                return
+            # IMPORTANT:
+            # The FK attribute name must be derived from the relationship
+            # mapping info, not from the runtime type of the owner.
+            #
+            # In polymorphic setups (single-table inheritance), `type(owner)`
+            # may be a subclass (e.g. CocoonCenterScraper) while the injected
+            # FK column was created based on the mapped base class name
+            # (e.g. `scraper_id`).
+            #
+            # We therefore prefer `child_owner_attr` (set by FK storage
+            # injection) and fall back to the historical heuristic.
+            fk_attr = None
+            if child_owner_attr:
+                fk_attr = f"{child_owner_attr}_id"
+
+            if not fk_attr or not hasattr(child_cls, fk_attr):
+                fallback_fk_attr = f"{type(owner).__name__.lower()}_id"
+                if hasattr(child_cls, fallback_fk_attr):
+                    fk_attr = fallback_fk_attr
+                else:
+                    self._loaded_from_db = True
+                    return
 
             # Only hit the DB when the in-memory collection is empty.
             # If it already contains items (e.g. user appended manually), keep them.
@@ -158,6 +180,9 @@ class _MaterializedO2MList(list):
         if list.__len__(self) > 0:
             setattr(owner, computed_at_attr, datetime.now(timezone.utc))
             session.flush()
+
+            if autocommit:
+                session.commit()
             return
 
         # Compute + persist.
@@ -192,6 +217,9 @@ class _MaterializedO2MList(list):
                 # Mark computed.
                 setattr(owner, computed_at_attr, datetime.now(timezone.utc))
                 session.flush()
+
+                if autocommit:
+                    session.commit()
 
                 # This instance now reflects the persisted state.
                 self._loaded_from_db = True

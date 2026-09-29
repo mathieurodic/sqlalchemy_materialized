@@ -52,6 +52,101 @@ def test_getter_computes_once_and_flushes_when_in_session(monkeypatch):
     assert calls == {"compute": 1, "flush": 1}
 
 
+def test_getter_autocommit_commits_after_flush(monkeypatch):
+    """When autocommit=True, getter should commit after successful flush."""
+    import etl_decorators.sqlalchemy.materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.descriptor as descriptor
+
+    calls = {"compute": 0, "flush": 0, "commit": 0}
+
+    class _BeginNested:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSession:
+        def begin_nested(self):
+            return _BeginNested()
+
+        def flush(self):
+            calls["flush"] += 1
+
+        def commit(self):
+            calls["commit"] += 1
+
+    monkeypatch.setattr(descriptor, "_require_session", lambda obj: FakeSession())
+
+    def compute(self) -> int:
+        calls["compute"] += 1
+        return 7
+
+    class Base(DeclarativeBase):
+        pass
+
+    class Model(Base):
+        __tablename__ = "model_unit_autocommit"
+        __allow_unmapped__ = True
+
+        id: Mapped[int] = mapped_column(primary_key=True)
+        value = dec.materialized_property(compute, autocommit=True)
+
+    m = Model()
+
+    assert m.value == 7
+    assert calls == {"compute": 1, "flush": 1, "commit": 1}
+
+    # Second access: no additional flush/commit
+    assert m.value == 7
+    assert calls == {"compute": 1, "flush": 1, "commit": 1}
+
+
+def test_getter_autosave_commits_after_flush(monkeypatch):
+    """autosave=True is the public alias of autocommit=True."""
+    import etl_decorators.sqlalchemy.materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.descriptor as descriptor
+
+    calls = {"compute": 0, "flush": 0, "commit": 0}
+
+    class _BeginNested:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSession:
+        def begin_nested(self):
+            return _BeginNested()
+
+        def flush(self):
+            calls["flush"] += 1
+
+        def commit(self):
+            calls["commit"] += 1
+
+    monkeypatch.setattr(descriptor, "_require_session", lambda obj: FakeSession())
+
+    def compute(self) -> int:
+        calls["compute"] += 1
+        return 7
+
+    class Base(DeclarativeBase):
+        pass
+
+    class Model(Base):
+        __tablename__ = "model_unit_autosave"
+        __allow_unmapped__ = True
+
+        id: Mapped[int] = mapped_column(primary_key=True)
+        value = dec.materialized_property(compute, autosave=True)
+
+    m = Model()
+    assert m.value == 7
+    assert calls == {"compute": 1, "flush": 1, "commit": 1}
+
+
 def test_getter_computes_once_and_does_not_flush_when_not_in_session(monkeypatch):
     import etl_decorators.sqlalchemy.materialized.decorator as dec
     import etl_decorators.sqlalchemy.materialized.descriptor as descriptor
@@ -156,3 +251,93 @@ def test_deleter_sets_backing_to_none_and_flushes_when_in_session(monkeypatch):
     assert getattr(m, "_compute") is None
     assert getattr(m, "_compute__computed_at") is None
     assert calls["flush"] == 1
+
+
+def test_deleter_autocommit_commits_after_flush(monkeypatch):
+    import etl_decorators.sqlalchemy.materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.descriptor as descriptor
+
+    calls = {"flush": 0, "commit": 0}
+
+    class _BeginNested:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSession:
+        def begin_nested(self):
+            return _BeginNested()
+
+        def flush(self):
+            calls["flush"] += 1
+
+        def commit(self):
+            calls["commit"] += 1
+
+    monkeypatch.setattr(descriptor, "_require_session", lambda obj: FakeSession())
+
+    def compute(self) -> int:
+        return 9
+
+    class Base(DeclarativeBase):
+        pass
+
+    class Model(Base):
+        __tablename__ = "model_deleter_autocommit"
+        __allow_unmapped__ = True
+
+        id: Mapped[int] = mapped_column(primary_key=True)
+        value = dec.materialized_property(compute, autocommit=True)
+
+    m = Model()
+    m.value = 1
+
+    del m.value
+    assert calls == {"flush": 1, "commit": 1}
+
+
+def test_deleter_autosave_commits_after_flush(monkeypatch):
+    import etl_decorators.sqlalchemy.materialized.decorator as dec
+    import etl_decorators.sqlalchemy.materialized.descriptor as descriptor
+
+    calls = {"flush": 0, "commit": 0}
+
+    class _BeginNested:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSession:
+        def begin_nested(self):
+            return _BeginNested()
+
+        def flush(self):
+            calls["flush"] += 1
+
+        def commit(self):
+            calls["commit"] += 1
+
+    monkeypatch.setattr(descriptor, "_require_session", lambda obj: FakeSession())
+
+    def compute(self) -> int:
+        return 9
+
+    class Base(DeclarativeBase):
+        pass
+
+    class Model(Base):
+        __tablename__ = "model_deleter_autosave"
+        __allow_unmapped__ = True
+
+        id: Mapped[int] = mapped_column(primary_key=True)
+        value = dec.materialized_property(compute, autosave=True)
+
+    m = Model()
+    m.value = 1
+
+    del m.value
+    assert calls == {"flush": 1, "commit": 1}

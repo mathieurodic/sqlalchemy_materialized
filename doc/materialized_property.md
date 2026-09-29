@@ -109,6 +109,32 @@ This yields the pipeline:
 This library intentionally flushes inside the getter on first access.
 Accessing the property may therefore trigger SQL statements / constraint checks.
 
+### Autosave / autocommit (durability on interruption)
+
+By default, `materialized_property` uses `session.flush()` to persist the
+materialized value **inside the current transaction**.
+
+If your program is interrupted (e.g. Ctrl+C) and the Session rolls back on
+exit, the flushed value may not be durable.
+
+Opt-in to committing right after successful materialization:
+
+```python
+@materialized_property(autosave=True)
+def value(self) -> int:
+    ...
+```
+
+`autosave` is implemented as an alias of `autocommit` (both are accepted).
+
+Semantics when `autosave=True` (or `autocommit=True`):
+
+- after first compute/materialization: `flush()` then `commit()`
+- when deleting the property (`del obj.value`): `flush()` then `commit()`
+
+Important: committing inside a property getter is a strong side effect and
+commits **all** pending changes on that Session.
+
 ## Invalidation & recompute
 
 ### Explicit invalidation

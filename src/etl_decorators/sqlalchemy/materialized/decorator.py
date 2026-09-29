@@ -14,6 +14,8 @@ def materialized_property(
     in_transaction: bool = True,
     depends_on: tuple[str, ...] = (),
     validate: bool = True,
+    autosave: bool = False,
+    autocommit: bool | None = None,
 ):
     """Create a materialized property.
 
@@ -23,10 +25,16 @@ def materialized_property(
     - value = materialized_property(compute)
     """
 
+    # Backwards/ergonomic aliasing:
+    # - `autosave` is the public flag name (requested by the task)
+    # - `autocommit` is a clearer synonym; if provided it overrides autosave
+    effective_autocommit = autosave if autocommit is None else autocommit
+
     config = _MaterializedConfig(
         in_transaction=in_transaction,
         depends_on=depends_on,
         validate=validate,
+        autocommit=effective_autocommit,
     )
 
     binder = OptionalFnDecoratorBase()

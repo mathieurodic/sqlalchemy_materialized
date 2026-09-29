@@ -1,7 +1,30 @@
 from __future__ import annotations
 
-from sqlalchemy import event
 import sqlalchemy as sa
+
+
+# NOTE: We intentionally keep an indirection layer around SQLAlchemy's
+# `event` module.
+#
+# Some tests monkeypatch `etl_decorators.sqlalchemy.materialized.depends_on.event.listen`
+# to exercise defensive branches. If we were to expose SQLAlchemy's global
+# `sqlalchemy.event` module directly, that monkeypatch would also affect
+# SQLAlchemy internals during mapper configuration.
+class _EventProxy:
+    @staticmethod
+    def listen(*args, **kwargs):  # noqa: ANN002, ANN003
+        from sqlalchemy import event as _sa_event
+
+        return _sa_event.listen(*args, **kwargs)
+
+    @staticmethod
+    def remove(*args, **kwargs):  # noqa: ANN002, ANN003
+        from sqlalchemy import event as _sa_event
+
+        return _sa_event.remove(*args, **kwargs)
+
+
+event = _EventProxy()
 
 
 def setup_dependency_invalidation(descriptor, owner: type) -> None:
@@ -102,7 +125,9 @@ def setup_dependency_invalidation(descriptor, owner: type) -> None:
         # configuration cycle.
         def remove_self():
             try:
-                event.remove(sa.orm.Mapper, "mapper_configured", install_for_mapped_class)
+                event.remove(
+                    sa.orm.Mapper, "mapper_configured", install_for_mapped_class
+                )
             except Exception:
                 pass
 

@@ -1,3 +1,4 @@
+import enum
 from datetime import date, datetime, time
 from typing import Any, get_args, get_origin
 
@@ -138,6 +139,16 @@ def make_sa_column(
         return mapped_column(
             name,
             PydanticJSON(t),
+            nullable=nullable,
+            **mapped_column_kwargs,
+        )
+
+    # 2b) "enum.Enum subclass" case: stored as VARCHAR via sa.Enum.
+    #     native_enum=False avoids CREATE TYPE on PostgreSQL and works on SQLite.
+    if isinstance(t, type) and issubclass(t, enum.Enum):
+        return mapped_column(
+            name,
+            sa.Enum(t, native_enum=False),
             nullable=nullable,
             **mapped_column_kwargs,
         )

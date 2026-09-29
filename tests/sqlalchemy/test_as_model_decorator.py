@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import enum
 from datetime import date
 
 import sqlalchemy as sa
@@ -164,3 +165,40 @@ def test_as_model_supports_materialized_property():
 
     assert "value" in Model.__table__.c
     assert "value__computed_at" in Model.__table__.c
+
+
+def test_as_model_enum_field_roundtrip_sqlite():
+    """Enum-annotated fields are stored as VARCHAR and round-trip correctly."""
+
+    class Status(str, enum.Enum):
+        active = "active"
+        inactive = "inactive"
+
+    class Base(DeclarativeBase):
+        pass
+
+    @as_model(Base)
+    class Item:
+        name: str
+        status: Status
+        optional_status: Status | None = None
+
+    engine = sa.create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    # Verify column type
+    assert isinstance(Item.__table__.c.status.type, sa.Enum)
+    assert Item.__table__.c.status.type.native_enum is False
+    assert Item.__table__.c.status.nullable is False
+    assert Item.__table__.c.optional_status.nullable is True
+
+    # Verify round-trip through the DB
+    with Session(engine) as session:
+        obj = Item(name="foo", status=Status.active)
+        session.add(obj)
+        session.commit()
+        session.expire(obj)
+
+        loaded = session.get(Item, obj.id)
+        assert loaded.status is Status.active
+        assert loaded.optional_status is None

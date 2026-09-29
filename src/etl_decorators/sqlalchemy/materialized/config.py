@@ -9,4 +9,5 @@ class _MaterializedConfig:
     in_transaction: bool = True
     depends_on: tuple[str, ...] = ()
     validate: bool = True
+    autocommit: bool = False
 

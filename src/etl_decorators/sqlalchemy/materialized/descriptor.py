@@ -244,6 +244,7 @@ class _MaterializedPropertyDescriptor:
         computed_at_attr = self.computed_at_attr
         compute_fn = self.fn
         in_transaction = self.config.in_transaction
+        autocommit = self.config.autocommit
         validate = self.config.validate
         is_fk = self._is_fk
         is_list = self._is_list
@@ -587,6 +588,13 @@ class _MaterializedPropertyDescriptor:
                         setattr(self, cache_attr, normalized)
                         setattr(self, computed_at_attr, datetime.now(timezone.utc))
                         session.flush()
+
+                    # Autocommit (opt-in): ensure durability even if caller
+                    # later aborts without committing the Session.
+                    #
+                    # Note: committing inside a getter is a strong side effect.
+                    if autocommit:
+                        session.commit()
                 except Exception as e:
                     logger.error(
                         "materialized_property compute failed (%s): %s",
@@ -642,5 +650,8 @@ class _MaterializedPropertyDescriptor:
             setattr(self, cache_attr, None)
             setattr(self, computed_at_attr, None)
             session.flush()
+
+            if autocommit:
+                session.commit()
 
         return prop

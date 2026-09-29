@@ -100,12 +100,10 @@ class LLM:
 
     model: str
     api_key: str | None = field(default=None, repr=False)
-    temperature: float = 0.1
     completion_kwargs: dict[str, Any] = field(default_factory=dict)
 
     def _completion_kwargs(self) -> dict[str, Any]:
         kwargs = dict(self.completion_kwargs or {})
-        kwargs.setdefault("temperature", self.temperature)
         return kwargs
 
     @overload
@@ -268,12 +266,19 @@ class LLM:
             cls._registered_models = set()
         if self.model not in cls._registered_models:
             import litellm
-            litellm.register_model({
-                self.model: {
-                    "supports_response_schema": True,
-                    "supports_function_calling": True,
-                }
-            })
+
+            # Some litellm versions (and our unit-test fakes) don't expose
+            # register_model(). Treat it as an optional optimization.
+            register_model = getattr(litellm, "register_model", None)
+            if callable(register_model):
+                register_model(
+                    {
+                        self.model: {
+                            "supports_response_schema": True,
+                            "supports_function_calling": True,
+                        }
+                    }
+                )
             cls._registered_models.add(self.model)
 
     def request(self, prompt: str, *, return_type: type[BaseModel] | None):
